@@ -41,7 +41,6 @@ module ocn_init_mode
 
    use ocn_init_spherical_utils
    use ocn_init_cosine_bell
-   !use ocn_init_TEMPLATE
    use ocn_init_baroclinic_channel
    use ocn_init_lock_exchange
    use ocn_init_internal_waves
@@ -65,6 +64,9 @@ module ocn_init_mode
    use ocn_init_test_sht
 
    use ocn_init_parabolic_bowl
+
+   use ocn_init_remap
+   !use ocn_init_TEMPLATE
 
    implicit none
    private
@@ -254,6 +256,7 @@ module ocn_init_mode
    function ocn_init_mode_run(domain) result(iErr)!{{{
 
       type (domain_type), intent(inout) :: domain
+      type (domain_type), pointer :: domain_ptr
       integer :: iErr
 
       integer :: itimestep
@@ -270,6 +273,8 @@ module ocn_init_mode
 
       type (MPAS_timeInterval_type) :: timeStep
       real (kind=RKIND), dimension(:,:), pointer :: normalVelocity
+
+      logical,pointer :: config_separate_barotropic_baroclinic_meshes
 
       ierr = 0
 
@@ -310,15 +315,30 @@ module ocn_init_mode
       call ocn_init_setup_transport_tests(domain, ierr)
       call ocn_init_setup_test_sht(domain, ierr)
       call ocn_init_setup_parabolic_bowl(domain, iErr)
+      call ocn_init_setup_remap(domain, iErr)
       !call ocn_init_setup_TEMPLATE(domain, ierr)
+      domain_ptr => domain % core % domainlist
+      do while (associated(domain_ptr))
+         call mpas_log_write( ' Completed setup of: ' // trim(config_init_configuration))
+         call mpas_timer_start('io_write', .false.)
+         call mpas_stream_mgr_write(domain_ptr % streamManager, ierr=ierr)
+         call mpas_timer_stop('io_write')
+         call mpas_timer_start('reset_io_alarms', .false.)
+         call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
+         call mpas_timer_stop('reset_io_alarms')
+         domain_ptr => domain_ptr % next
+      end do
 
-      call mpas_log_write( ' Completed setup of: ' // trim(config_init_configuration))
-      call mpas_timer_start('io_write', .false.)
-      call mpas_stream_mgr_write(domain % streamManager, ierr=ierr)
-      call mpas_timer_stop('io_write')
-      call mpas_timer_start('reset_io_alarms', .false.)
-      call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
-      call mpas_timer_stop('reset_io_alarms')
+!      call mpas_pool_get_config(domain % configs, 'config_separate_barotropic_baroclinic_meshes',&
+!                           config_separate_barotropic_baroclinic_meshes)
+!      if (config_separate_barotropic_baroclinic_meshes) then
+!         call mpas_timer_start('io_write', .false.)
+!         call mpas_stream_mgr_write(domain % next % streamManager, ierr=ierr)
+!         call mpas_timer_stop('io_write')
+!         call mpas_timer_start('reset_io_alarms', .false.)
+!         call mpas_stream_mgr_reset_alarms(domain % next % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
+!         call mpas_timer_stop('reset_io_alarms')
+!      endif
 
    end function ocn_init_mode_run!}}}
 
@@ -428,6 +448,8 @@ module ocn_init_mode
       iErr = ior(iErr, err_tmp)
  
       call ocn_init_validate_parabolic_bowl(configPool, packagePool, iocontext, iErr=err_tmp)
+      iErr = ior(iErr, err_tmp)
+      call ocn_init_validate_remap(configPool, packagePool, iocontext, iErr=err_tmp)
       iErr = ior(iErr, err_tmp)
 
       ! call ocn_init_validate_TEMPLATE(configPool, packagePool, iocontext, iErr=err_tmp)

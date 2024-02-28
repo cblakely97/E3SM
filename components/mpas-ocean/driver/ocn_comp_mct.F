@@ -3316,7 +3316,7 @@ contains
 #endif
 
     call seq_timemgr_EClockGetData( EClock, stepno=cur_ocn_stepno )
-#ifdef MOABDEBUG
+!#ifdef MOABDEBUG
     write(lnum,"(I0.2)")cur_ocn_stepno
     outfile = 'OcnImp_'//trim(lnum)//'.h5m'//C_NULL_CHAR
     wopts   = 'PARALLEL=WRITE_PART'//C_NULL_CHAR
@@ -3324,7 +3324,7 @@ contains
     if (ierr > 0 )  then
        write(ocnLogUnit,*) 'Fail to write ocean state '
     endif
-#endif   
+!#endif   
    errorCode = 0
 
 !  get moab tags from MPOID

@@ -70,6 +70,7 @@ module mpas_subdriver
       character(len=StrKIND) :: timeStamp
       integer :: ierr
       integer :: blockID
+      integer :: dmy1, dmy2
 
       character(kind=c_char), dimension(StrKIND+1) :: c_filename       ! StrKIND+1 for C null-termination character
       integer(kind=c_int) :: c_comm
@@ -374,6 +375,15 @@ module mpas_subdriver
       if ( ierr /= 0 ) then
          call mpas_log_write('Core init failed for core '//trim(domain_ptr % core % coreName), messageType=MPAS_LOG_CRIT)
       end if
+#ifdef CORE_OCEAN
+      if ( domain_ptr % domainID .eq. 0 ) then
+         cmpbc = 314
+         call init_moab_mpas(domain_ptr, cmpbc, cmpbcPID)
+      elseif ( domain_ptr % domainID .eq. 1 ) then
+         cmpbtr = 315
+         call init_moab_mpas(domain_ptr, cmpbtr, cmpbtrPID)
+      endif
+#endif
 
       call mpas_timer_stop('initialize')
 
