@@ -377,23 +377,6 @@ module mpas_subdriver
       end if
 #ifdef CORE_OCEAN
       call ocn_spatial_mode_splitting_init_moab_domain(domain_ptr)
-        if ( domain_ptr % domainID .eq. 0 ) then
-         cmpbc = 314
-         call init_moab_mpas(domain_ptr, cmpbc, cmpbcPID)
-         write(6,*) ""
-         write(6,*) ""
-         write(6,*) "init-ed baroclinic domain in moab"
-         write(6,*) ""
-         write(6,*) ""
-      elseif ( domain_ptr % domainID .eq. 1 ) then
-         cmpbtr = 315
-         call init_moab_mpas(domain_ptr, cmpbtr, cmpbtrPID)
-         write(6,*) ""
-         write(6,*) ""
-         write(6,*) "init-ed barotropic domain in moab"
-         write(6,*) ""
-         write(6,*) ""
-      endif
 #endif
 
       call mpas_timer_stop('initialize')
