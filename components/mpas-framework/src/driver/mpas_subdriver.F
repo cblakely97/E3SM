@@ -376,12 +376,23 @@ module mpas_subdriver
          call mpas_log_write('Core init failed for core '//trim(domain_ptr % core % coreName), messageType=MPAS_LOG_CRIT)
       end if
 #ifdef CORE_OCEAN
-      if ( domain_ptr % domainID .eq. 0 ) then
+      call ocn_spatial_mode_splitting_init_moab_domain(domain_ptr)
+        if ( domain_ptr % domainID .eq. 0 ) then
          cmpbc = 314
          call init_moab_mpas(domain_ptr, cmpbc, cmpbcPID)
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "init-ed baroclinic domain in moab"
+         write(6,*) ""
+         write(6,*) ""
       elseif ( domain_ptr % domainID .eq. 1 ) then
          cmpbtr = 315
          call init_moab_mpas(domain_ptr, cmpbtr, cmpbtrPID)
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "init-ed barotropic domain in moab"
+         write(6,*) ""
+         write(6,*) ""
       endif
 #endif
 

@@ -274,7 +274,7 @@ module ocn_init_mode
       type (MPAS_timeInterval_type) :: timeStep
       real (kind=RKIND), dimension(:,:), pointer :: normalVelocity
 
-      logical,pointer :: config_separate_barotropic_baroclinic_meshes
+      logical,pointer :: config_spatial_mode_splitting
 
       ierr = 0
 

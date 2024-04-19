@@ -1196,8 +1196,8 @@
 					possible_values="Any positive integer greater than or equal to one. A value of one employs the same dt in all regions."
 		/>
 	</nml_record>
-	<nml_record name="separate_barotropic_baroclinic_meshes" mode="init;forward">
-		<nml_option name="config_separate_barotropic_baroclinic_meshes" type="logical" default_value=".false."
+	<nml_record name="spatial_mode_splitting" mode="init;forward">
+		<nml_option name="config_spatial_mode_splitting" type="logical" default_value=".false."
 					description="Enable separate spatial meshes for barotropic and baroclinic modes"
 					possible_values=".true. or .false."
 		/>
@@ -1629,6 +1629,7 @@
 		<package name="gotmPKG" description="This package is for GOTM variables, which are only needed when using GOTM for the vertical turbulence closure."/>
 		<package name="verticalRemapPKG" description="This package is for variables required for vertical Lagrangian remapping."/>
 		<package name="activeWavePKG" description="This package controls variables required for wave coupling"/>
+		<package name="spatialModeSplitPKG" description="This package controls variables required spatial mode splitting"/>
 	</packages>
 
 	<streams>
@@ -2925,9 +2926,25 @@
 			 description="Barotropic tendency computed from the baroclinic equations in stage 1 of the split-explicit algorithm."
 			 packages="initMode;forwardMode;analysisMode"
 		/>
+		<var name="barotropicForcingZonal" type="real" dimensions="nCells Time" units="m s^-2"
+			 description="Zonal barotropic tendency computed from the baroclinic equations in stage 1 of the split-explicit algorithm on cell centers."
+			 packages="spatialModeSplitPKG"
+		/>
+		<var name="barotropicForcingMeridional" type="real" dimensions="nCells Time" units="m s^-2"
+			 description="Meridional barotropic tendency computed from the baroclinic equations in stage 1 of the split-explicit algorithm on cell centers."
+			 packages="spatialModeSplitPKG"
+		/>
 		<var name="barotropicThicknessFlux" type="real" dimensions="nEdges Time" units="m^2 s^-1"
 			 description="Barotropic thickness flux at each edge, used to advance sea surface height in each subcycle of stage 2 of the split-explicit algorithm."
 			 packages="forwardMode;analysisMode"
+		/>
+		<var name="barotropicThicknessFluxZonal" type="real" dimensions="nCells Time" units="m s^-1"
+			 description="Zonal barotropic thickness flux at cell centers, used to advance sea surface height in each subcycle of stage 2 of the split-explicit algorithm."
+			 packages="spatialModeSplitPKG"
+		/>
+		<var name="barotropicThicknessFluxMeridional" type="real" dimensions="nCells Time" units="m s^-1"
+			 description="Meridional barotropic thickness flux at cell centers, used to advance sea surface height in each subcycle of stage 2 of the split-explicit algorithm."
+			 packages="spatialModeSplitPKG"
 		/>
 
 		<var name="velocityX" type="real" dimensions="nVertLevels nCells Time" units="m s^-1"
@@ -2986,11 +3003,11 @@
 		/>
 		<var name="gradSSHX" type="real" dimensions="nCells Time" units="1"
 			 description="X Component of the gradient of sea surface height at cell centers."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="gradSSHY" type="real" dimensions="nCells Time" units="1"
 			 description="Y Component of the gradient of sea surface height at cell centers."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="gradSSHZ" type="real" dimensions="nCells Time" units="1"
 			 description="Z Component of the gradient of sea surface height at cell centers."

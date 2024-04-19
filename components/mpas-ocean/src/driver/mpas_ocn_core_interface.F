@@ -142,6 +142,7 @@ module ocn_core_interface
       logical, pointer :: gotmPKGActive
       logical, pointer :: verticalRemapPKGActive
       logical, pointer :: activeWavePKGActive
+      logical, pointer :: spatialModeSplitPKGActive
 
       type (mpas_pool_iterator_type) :: pkgItr
       logical, pointer :: packageActive
@@ -429,6 +430,18 @@ module ocn_core_interface
                                 config_use_active_wave)
       if (config_use_active_wave) then
          activeWavePKGActive = .true.
+      endif
+
+      !
+      ! test for spatial mode splitting
+      !
+      call mpas_pool_get_package(packagePool, 'spatialModeSplitPKGActive', &
+                              spatialModeSplitPKGActive)
+      call mpas_pool_get_config(configPool, &
+                              'config_spatial_mode_splitting',&
+                               config_spatial_mode_splitting)
+      if (config_spatial_mode_splitting) then
+         spatialModeSplitPKGActive = .true.
       endif
 
       !
@@ -750,12 +763,12 @@ module ocn_core_interface
       type (domain_type), intent(inout), pointer :: domain
 
       integer :: iErr
-      logical, pointer :: config_separate_barotropic_baroclinic_meshes
+      logical, pointer :: config_spatial_mode_splitting
       character(len=StrKIND), pointer :: config_block_decomp_file_prefix
       character(len=StrKIND), pointer :: config_proc_decomp_file_prefix
 
-      call mpas_pool_get_config(domain % configs, 'config_separate_barotropic_baroclinic_meshes', config_separate_barotropic_baroclinic_meshes)
-      if (.not. config_separate_barotropic_baroclinic_meshes) then
+      call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting', config_spatial_mode_splitting)
+      if (.not. config_spatial_mode_splitting) then
          deallocate(domain % next)
       end if
 
