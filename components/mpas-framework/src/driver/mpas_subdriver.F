@@ -375,9 +375,6 @@ module mpas_subdriver
       if ( ierr /= 0 ) then
          call mpas_log_write('Core init failed for core '//trim(domain_ptr % core % coreName), messageType=MPAS_LOG_CRIT)
       end if
-#ifdef CORE_OCEAN
-      call ocn_spatial_mode_splitting_init_moab_domain(domain_ptr)
-#endif
 
       call mpas_timer_stop('initialize')
 

@@ -30,8 +30,6 @@ module ocn_spatial_mode_splitting
 
     use ocn_constants
     use ocn_config
-    use ocn_init_vertical_grids
-    use ocn_init_cell_markers
     use mpas_geometry_utils
 #ifdef HAVE_MOAB
     use mpas_log     
@@ -75,7 +73,7 @@ module ocn_spatial_mode_splitting
     ! identifiers for moab meshes
     ! id's on compute core 
     integer :: cmpbc    = 314
-    integer :: cmpbtr   = 314
+    integer :: cmpbtr   = 315
     integer :: bc2btrid = 316
     integer :: btr2bcid = 317
     ! id's on coupler *NOTE: we don't presently have separate coupler cores
@@ -131,7 +129,6 @@ contains
     subroutine ocn_spatial_mode_splitting_init_moab_domain(domain)!{{{
     type (domain_type), intent(inout) :: domain
     type (mpas_pool_type), pointer :: meshPool
-    integer, pointer :: nCellsSolve
     logical, pointer :: config_spatial_mode_splitting
     integer :: ierr=0
     integer, dimension(3) :: nverts, nelem, nblocks, nsbc, ndbc
@@ -155,7 +152,7 @@ contains
        ! allocate barotropicForcingX, barotropicForcingY, barotropicForcingZ for baroclinic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
-       call mpas_pool_get_subpool(domain % structs, 'mesh', meshPool)
+       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
        allocate ( barotropicForcingX(nCellsSolve),&
                   barotropicForcingY(nCellsSolve),&
@@ -172,7 +169,7 @@ contains
        ! allocate barotropicThicknessFluxX, etc. for barotropic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
-       call mpas_pool_get_subpool(domain % structs, 'mesh', meshPool)
+       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
        allocate ( barotropicThicknessFluxX_btr(nCellsSolve),&
                   barotropicThicknessFluxY_btr(nCellsSolve),&
@@ -293,7 +290,7 @@ contains
     call errorout(ierr, "failed to define btr2bc tags on bc mesh")
     ! initialize buffers for transmitting the data (both baroclinic to barotropic and
     ! baroclinic to barotropic while we have the mesh size)
-    ierr = iMOAB_GetMeshInfo(cmpbcPID, nverts, nele, nblocks, nsbc, ndbc)
+    ierr = iMOAB_GetMeshInfo(cmpbcPID, nverts, nelem, nblocks, nsbc, ndbc)
     call errorout(ierr, "failed to retrieve mesh info from baroclinic mesh")
     allocate ( bc2btrVar(2*nelem(3)), btr2bcVar(2*nelem(3)) )
     bc2btrVar(:) = 0d0
@@ -315,7 +312,7 @@ contains
                   btr2bcIndices(2))
     call errorout(ierr, "failed to define btr2bc tags on btr mesh")
     ! initialize buffers for transmitting data from barotropic to baroclinic mesh
-    ierr = iMOAB_GetMeshInfo(cmpbtrPID, nverts, nele, nblocks, nsbc, ndbc)
+    ierr = iMOAB_GetMeshInfo(cmpbtrPID, nverts, nelem, nblocks, nsbc, ndbc)
     call errorout(ierr, "failed to retrieve mesh info from barotropic mesh")
     allocate ( bc2btrVar_btr(2*nelem(3)), btr2bcVar_btr(2*nelem(3)) )
 
@@ -353,6 +350,7 @@ contains
     !-----------------------------------------------------------------
     type (domain_type), pointer :: domain_btr
     ! 
+    type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     ! mesh information
@@ -464,8 +462,8 @@ contains
              meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
                                       barotropicForcingMeridional_btr(cell2))
              barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
-                              cos(angleEdge(iEdge))*zonal_bt_edge + &
-                              sin(angleEdge(iEdge))*merid_bt_edge
+                              cos(angleEdge(iEdge))*zonal_edge + &
+                              sin(angleEdge(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo
@@ -502,6 +500,7 @@ contains
     !-----------------------------------------------------------------
     type (domain_type), pointer :: domain_btr
     ! 
+    type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     ! mesh information
@@ -547,6 +546,44 @@ contains
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
                   barotropicThicknessFluxMeridional_btr)
         ! reconstruct from edge based to cell-centered quantities
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFlux_btr has size",shape(barotropicThicknessFlux_btr)
+            write(6,*) ""
+            write(6,*) ""
+        if (allocated(barotropicThicknessFluxX_btr)) then
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFluxX_btr has size",shape(barotropicThicknessFluxX_btr)
+            write(6,*) ""
+            write(6,*) ""
+        endif
+        if (allocated(barotropicThicknessFluxY_btr)) then
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFluxY_btr has size",shape(barotropicThicknessFluxY_btr)
+            write(6,*) ""
+            write(6,*) ""
+        endif
+        if (allocated(barotropicThicknessFluxZ_btr)) then
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFluxZ_btr has size",shape(barotropicThicknessFluxZ_btr)
+            write(6,*) ""
+            write(6,*) ""
+        endif
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFluxZonal_btr has size",&
+                           shape(barotropicThicknessFluxZonal_btr)
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) ""
+            write(6,*) "barotropiThicknessFluxMeridional_btr has size",&
+                           shape(barotropicThicknessFluxMeridional_btr)
+            write(6,*) ""
+            write(6,*) ""
         call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
                   barotropicThicknessFluxX_btr,&
                   barotropicThicknessFluxY_btr,&
@@ -555,8 +592,8 @@ contains
                   barotropicThicknessFluxMeridional_btr)
         ! pack buffers
         do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal(iCell)
-            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional(iCell)
+            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
+            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
         enddo
         ! put buffers into moab structure
         ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
@@ -616,8 +653,8 @@ contains
              meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional(cell1) + &
                                       barotropicThicknessFluxMeridional(cell2))
              barotropicThicknessFlux(iEdge) = barotropicThicknessFlux(iEdge) + &
-                              cos(angleEdge(iEdge))*zonal_bt_edge + &
-                              sin(angleEdge(iEdge))*merid_bt_edge
+                              cos(angleEdge(iEdge))*zonal_edge + &
+                              sin(angleEdge(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo

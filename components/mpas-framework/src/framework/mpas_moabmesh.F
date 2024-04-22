@@ -11,11 +11,7 @@ module mpas_moabmesh
   !use mpas_vector_operations
 #include "moab/MOABConfig.h"
   implicit none
-  integer,public :: cmpbc, cmpbtr, bcbtrid
-  integer,public :: cplbc, cplbtr
-  integer,public :: cmpbcPID, cmpbtrPID, bcbtrPID
-  integer,public :: cplbcPID, cplbtrPID
-
+  
   contains
 
   SUBROUTINE errorout(ierr, message)

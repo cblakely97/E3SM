@@ -20,7 +20,9 @@ module ocn_core_interface
 #ifndef EXCLUDE_INIT_MODE
    use ocn_init_mode
 #endif
-
+#ifdef HAVE_MOAB
+   use ocn_spatial_mode_splitting
+#endif
    private
 
    public :: ocn_setup_core, ocn_setup_domain, ocn_configure_domain
@@ -177,6 +179,7 @@ module ocn_core_interface
       logical, pointer :: config_use_time_varying_land_ice_forcing
       logical, pointer :: config_use_gotm
       logical, pointer :: config_use_active_wave
+      logical, pointer :: config_spatial_mode_splitting
 
       character (len=StrKIND), pointer :: config_time_integrator
       character (len=StrKIND), pointer :: config_ocean_run_mode
@@ -441,6 +444,11 @@ module ocn_core_interface
                               'config_spatial_mode_splitting',&
                                config_spatial_mode_splitting)
       if (config_spatial_mode_splitting) then
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "inside config_spatial_mode_splitting logical"
+         write(6,*) ""
+         write(6,*) ""
          spatialModeSplitPKGActive = .true.
       endif
 
@@ -782,6 +790,9 @@ module ocn_core_interface
          config_proc_decomp_file_prefix = trim(config_proc_decomp_file_prefix)//'btr.'
 
       end if
+#ifdef HAVE_MOAB
+      !call ocn_spatial_mode_splitting_init_moab_domain(domain)
+#endif
       iErr = 0
    end subroutine ocn_configure_domain!}}}
 

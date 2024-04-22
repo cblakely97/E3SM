@@ -2936,7 +2936,7 @@
 		/>
 		<var name="barotropicThicknessFlux" type="real" dimensions="nEdges Time" units="m^2 s^-1"
 			 description="Barotropic thickness flux at each edge, used to advance sea surface height in each subcycle of stage 2 of the split-explicit algorithm."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="barotropicThicknessFluxZonal" type="real" dimensions="nCells Time" units="m s^-1"
 			 description="Zonal barotropic thickness flux at cell centers, used to advance sea surface height in each subcycle of stage 2 of the split-explicit algorithm."
