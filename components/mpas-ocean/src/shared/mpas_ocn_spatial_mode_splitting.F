@@ -536,17 +536,13 @@ contains
         do iEdge = 1,nEdgesSolve_btr
             cell1 = cellsOnEdge(1, iEdge)
             cell2 = cellsOnEdge(2, iEdge)
-!            if (cell1.gt.nCellsSolve_btr.OR.cell1.lt.1.OR. &
-!                cell2.gt.nCellsSolve_btr.OR.cell2.lt.1) then
-!                cycle
-!             endif
-             zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
-                                      barotropicForcingZonal_btr(cell2))
-             meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
-                                      barotropicForcingMeridional_btr(cell2))
-             barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
-                              cos(angleEdge(iEdge))*zonal_edge + &
-                              sin(angleEdge(iEdge))*meridional_edge
+            zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
+                                  barotropicForcingZonal_btr(cell2))
+            meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
+                                       barotropicForcingMeridional_btr(cell2))
+            barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
+                                           cos(angleEdge(iEdge))*zonal_edge + &
+                                           sin(angleEdge(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo
@@ -724,17 +720,13 @@ contains
         do iEdge = 1,nEdgesSolve
            cell1 = cellsOnEdge(1, iEdge)
            cell2 = cellsOnEdge(2,iEdge)
-!            if (cell1.gt.nCellsSolve.OR.cell1.lt.1.OR. &
-!                cell2.gt.nCellsSolve.OR.cell2.lt.1) then
-!                cycle
-!             endif
-             zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal(cell1) + &
-                                   barotropicThicknessFluxZonal(cell2))
-             meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional(cell1) + &
-                                        barotropicThicknessFluxMeridional(cell2))
-             barotropicThicknessFlux(iEdge) = barotropicThicknessFlux(iEdge) + &
-                                              cos(angleEdge(iEdge))*zonal_edge + &
-                                              sin(angleEdge(iEdge))*meridional_edge
+           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal(cell1) + &
+                                 barotropicThicknessFluxZonal(cell2))
+           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional(cell1) + &
+                                      barotropicThicknessFluxMeridional(cell2))
+           barotropicThicknessFlux(iEdge) = barotropicThicknessFlux(iEdge) + &
+                                            cos(angleEdge(iEdge))*zonal_edge + &
+                                            sin(angleEdge(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo
