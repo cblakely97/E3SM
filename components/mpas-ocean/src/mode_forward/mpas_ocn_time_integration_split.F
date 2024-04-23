@@ -839,6 +839,17 @@ module ocn_time_integration_split
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! END baroclinic iterations on linear Coriolis term
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         ! remap barotropicForcing from baroclinic domain to barotropic
+         ! domain for spatial mode splitting. 
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+         ! send barotropicForcing to barotropic domain
+         call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+
+         ! point nCells, nEdges, etc. to appropriate values on barotropic
+         ! domain for subcycling
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! Stage 2: Barotropic velocity prediction, explicitly subcycled

@@ -444,11 +444,6 @@ module ocn_core_interface
                               'config_spatial_mode_splitting',&
                                config_spatial_mode_splitting)
       if (config_spatial_mode_splitting) then
-         write(6,*) ""
-         write(6,*) ""
-         write(6,*) "inside config_spatial_mode_splitting logical"
-         write(6,*) ""
-         write(6,*) ""
          spatialModeSplitPKGActive = .true.
       endif
 

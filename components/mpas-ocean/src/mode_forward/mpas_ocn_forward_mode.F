@@ -97,6 +97,8 @@ module ocn_forward_mode
    use ocn_constants
    use ocn_config
 
+   use ocn_spatial_mode_splitting
+
    implicit none
    private
 
@@ -507,6 +509,9 @@ module ocn_forward_mode
       ierr = ior(ierr,err_tmp)
       call ocn_manufactured_solution_init(domain, err_tmp)
       ierr = ior(ierr,err_tmp)
+
+      ! initialize iMOAB for spatial mode splitting
+      call ocn_spatial_mode_splitting_init_moab_domain(domain)
 
       if (ierr /= 0) then
          call mpas_log_write( &
