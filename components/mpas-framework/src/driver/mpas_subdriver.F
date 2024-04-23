@@ -70,7 +70,6 @@ module mpas_subdriver
       character(len=StrKIND) :: timeStamp
       integer :: ierr
       integer :: blockID
-      integer :: dmy1, dmy2
 
       character(kind=c_char), dimension(StrKIND+1) :: c_filename       ! StrKIND+1 for C null-termination character
       integer(kind=c_int) :: c_comm

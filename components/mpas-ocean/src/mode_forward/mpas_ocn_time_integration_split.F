@@ -49,6 +49,8 @@ module ocn_time_integration_split
    use ocn_surface_land_ice_fluxes
    use ocn_transport_tests
 
+   use ocn_spatial_mode_splitting
+
    implicit none
    private
    save

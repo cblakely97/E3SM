@@ -29,8 +29,7 @@ module mpas_moabmesh
      iMOAB_CreateVertices, iMOAB_CreateElements, &
      iMOAB_ResolveSharedEntities, iMOAB_DetermineGhostEntities, &
      iMOAB_DefineTagStorage,  iMOAB_SetIntTagStorage , &
-     iMOAB_UpdateMeshInfo, iMOAB_SetDoubleTagStorage, &
-     iMOAB_WriteMesh
+     iMOAB_UpdateMeshInfo, iMOAB_SetDoubleTagStorage
 
     type (domain_type), intent(inout) :: domain
     integer , intent(in) :: ext_comp_id
@@ -59,9 +58,6 @@ module mpas_moabmesh
     character*100  tagname, lnum
     integer tagtype, numco, tag_sto_len, ent_type, tagindex, currentVertex
     real (kind=RKIND), pointer :: sphere_radius
-    ! cpb temporary
-    integer,save :: counter=1
-    character*100 :: outfile,wopts
 
     c_comm = domain % dminfo % comm
     write(lnum,"(I0.2)")ext_comp_id
@@ -225,15 +221,7 @@ module mpas_moabmesh
       call errorout(1, 'more than one block per task')
     endif 
     ierr = iMOAB_UpdateMeshInfo(pid)
-!    call errorout(ierr, 'fail to update mesh info')
-!    outfile='moabmesh'//'.nc'//C_NULL_CHAR
-!    if (counter .gt. 1) then
-!       outfile='moabmesh_btr'//'.nc'//C_NULL_CHAR
-!    endif
-!    counter = counter + 1
-!    wopts   = C_NULL_CHAR
-!    ierr = iMOAB_WriteMesh(pid,outfile,wopts)
-    
+    call errorout(ierr, 'fail to update mesh info')
     
   end subroutine init_moab_mpas
 #endif

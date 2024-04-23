@@ -20,9 +20,6 @@ module ocn_core_interface
 #ifndef EXCLUDE_INIT_MODE
    use ocn_init_mode
 #endif
-#ifdef HAVE_MOAB
-   use ocn_spatial_mode_splitting
-#endif
    private
 
    public :: ocn_setup_core, ocn_setup_domain, ocn_configure_domain
@@ -785,9 +782,6 @@ module ocn_core_interface
          config_proc_decomp_file_prefix = trim(config_proc_decomp_file_prefix)//'btr.'
 
       end if
-#ifdef HAVE_MOAB
-      !call ocn_spatial_mode_splitting_init_moab_domain(domain)
-#endif
       iErr = 0
    end subroutine ocn_configure_domain!}}}
 
