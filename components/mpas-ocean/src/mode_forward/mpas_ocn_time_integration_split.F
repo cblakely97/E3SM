@@ -286,6 +286,17 @@ module ocn_time_integration_split
       real (kind=RKIND), dimension(:,:), pointer :: &
          layerThicknessLagNew
 
+      ! variables for spatial mode splitting
+      type (domain_type), pointer :: domain_btr         ! barotropic domain pointer
+
+      type (mpas_pool_type), pointer :: statePool_bc, & ! baroclinic state pool
+                                        statePool_btr, &! barotropic state pool
+                                        forcingPool_bc, &
+                                        forcingPool_btr, &
+                                        tendPool_bc, &
+                                        tendPool_btr
+
+
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
       ! indexSSHGradientZonal, indexSSHGradientMeridional
@@ -327,14 +338,45 @@ module ocn_time_integration_split
       call mpas_pool_get_subpool(block%structs, 'mesh', meshPool)
       call mpas_pool_get_subpool(block%structs, 'verticalMesh', &
                                                  verticalMeshPool)
-      call mpas_pool_get_subpool(block%structs, 'state', &
+
+      ! for spatial mode splitting we need both baroclinic and barotropic pointers/pools
+      if ( config_spatial_mode_splitting) then
+
+        ! "next" domain is barotropic domain
+        domain_btr => domain % next
+
+        ! get baroclinic domain pools
+        call mpas_pool_get_subpool(block%structs, 'state',&
+                                   statePool_bc)
+        call mpas_pool_get_subpool(block%structs, 'forcing',&
+                                   forcingPool_bc)
+        call mpas_pool_get_subpool(block%structs, 'tend',&
+                                   tendPool_bc)
+         
+        ! get barotropic domain pools
+        call mpas_pool_get_subpool(domain_btr%blocklist%structs,&
+                                    'state', statePool_btr)
+        call mpas_pool_get_subpool(domain_btr%blocklist%structs,&
+                                    'forcing', forcingPool_btr)
+        call mpas_pool_get_subpool(domain_btr%blocklist%structs,&
+                                    'tend', tendPool_btr)
+
+        ! point to baroclinic state pool for baroclinic time step
+        statePool   => statePool_bc
+        forcingPool => forcingPool_bc
+        tendPool    => tendPool_bc
+      else
+
+        ! if we are not using spatial mode splitting just use regular pools
+        call mpas_pool_get_subpool(block%structs, 'state', &
                                                  statePool)
-      call mpas_pool_get_subpool(block%structs, 'forcing', &
-                                                 forcingPool)
+        call mpas_pool_get_subpool(block%structs, 'forcing', &
+                                                   forcingPool)
+        call mpas_pool_get_subpool(block%structs, 'tend', &
+                                                   tendPool)
+      endif
       call mpas_pool_get_subpool(block%structs, 'shortwave', &
                                                  swForcingPool)
-      call mpas_pool_get_subpool(block%structs, 'tend', &
-                                                 tendPool)
       call mpas_pool_get_subpool(block%structs, 'scratch', &
                                                  scratchPool)
       call mpas_pool_get_subpool(statePool, 'tracers', &
@@ -847,11 +889,21 @@ module ocn_time_integration_split
          ! domain for spatial mode splitting. 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-         ! send barotropicForcing to barotropic domain
-         call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+         if (config_spatial_mode_splitting) then
 
-         ! point nCells, nEdges, etc. to appropriate values on barotropic
-         ! domain for subcycling
+           ! send barotropicForcing to barotropic domain
+           call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+
+           ! point statePool to barotropic domain
+           statePool   => statePool_btr
+           forcingPool => forcingPool_btr
+           tendPool    => tendPool_btr
+
+           ! point nCells, nEdges, etc. to appropriate values on barotropic
+           ! domain for subcycling
+           !call ocn_spatial_mode_splitting_mesh_redirect(domain_btr)
+
+         endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! Stage 2: Barotropic velocity prediction, explicitly subcycled
@@ -1604,6 +1656,30 @@ module ocn_time_integration_split
             !$omp end parallel
 
             call mpas_timer_stop('btr se norm')
+
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            ! remap barotropicForcing from baroclinic domain to barotropic
+            ! domain for spatial mode splitting. 
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+            ! pretty sure we need to transmit barotropicThicknessFlux + normalBarotropicVelocity?
+            ! I also think we need to somehow update ssh on the barotropic mesh?
+
+            if (config_spatial_mode_splitting) then
+
+              ! send barotropicForcing to barotropic domain
+              call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
+
+              ! point statePool to barotropic domain
+              statePool   => statePool_bc
+              forcingPool => forcingPool_bc
+              tendPool    => tendPool_bc
+
+              ! point nCells, nEdges, etc. to appropriate values on barotropic
+              ! domain for subcycling
+              !call ocn_spatial_mode_splitting_mesh_redirect(domain)
+
+            endif
 
             ! boundary update on F
             call mpas_timer_start("se halo F and btr vel")

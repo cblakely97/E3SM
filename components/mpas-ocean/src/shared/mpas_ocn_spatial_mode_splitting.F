@@ -39,11 +39,14 @@ module ocn_spatial_mode_splitting
     use mpas_vector_reconstruction
 
     use ocn_diagnostics_variables
+    use ocn_mesh
 
 #ifdef HAVE_MOAB
     use iMOAB
 #include "moab/MOABConfig.h"
 #endif
+
+    use mpi
 
     implicit none
     private
@@ -70,17 +73,23 @@ module ocn_spatial_mode_splitting
     ! Private module variables
     !
     !--------------------------------------------------------------------
+
+    ! mpi groups/comms. All of these span the same processors
+    integer, pointer :: bcComm, btrComm
+    integer :: cplComm, bcCouComm, btrCouComm   ! coupler comms
+    integer :: bcGroup, btrGroup, cplGroup      ! groups
    
     ! identifiers for moab meshes
     ! id's on compute core 
     integer :: cmpbc    = 314
     integer :: cmpbtr   = 315
-    integer :: bc2btrid = 316
-    integer :: btr2bcid = 317
+    integer :: bc2btrid = 416
+    integer :: btr2bcid = 417
 
     ! id's on coupler *NOTE: we don't presently have separate coupler cores
     ! but iMOAB requires us to register a coupler anyways.
-    integer :: cplbc, cplbtr
+    integer :: cplbc    = 414
+    integer :: cplbtr   = 415
 
     ! PID's for MOAB
     integer,public :: cmpbcPID, cmpbtrPID, bc2btrPID, btr2bcPID
@@ -91,7 +100,9 @@ module ocn_spatial_mode_splitting
     character(:), allocatable :: bc2btrFields, bc2btrFields_btr,&
                                  btr2bcFields, btr2bcFields_btr
     integer, dimension(2) :: bc2btrIndices, btr2bcIndices,&
-                             bc2btrTypes, btr2bcTypes
+                             bc2btrTypes, btr2bcTypes, &
+                             bc2btrIndicesCou, btr2bcIndicesCou, &
+                             bc2btrTypesCou, btr2bcTypesCou
     real (kind=RKIND), dimension(:), allocatable :: bc2btrVar, btr2bcVar, &
                                                     bc2btrVar_btr, btr2bcVar_btr
 
@@ -108,9 +119,9 @@ module ocn_spatial_mode_splitting
     ! the fields that are used for remapping. They are outputs of 
     ! mpas_reconstruct but are not needed so we allocate them as private
     ! module variables but they are never used.
-    real (kind=RKIND), dimension(:), allocatable :: barotropicForcingX,&
-                                                    barotropicForcingY,&
-                                                    barotropicForcingZ,&
+    real (kind=RKIND), dimension(:), allocatable :: barotropicForcingX_bc,&
+                                                    barotropicForcingY_bc,&
+                                                    barotropicForcingZ_bc,&
                                                     barotropicThicknessFluxX_btr,&
                                                     barotropicThicknessFluxY_btr,&
                                                     barotropicThicknessFluxZ_btr
@@ -151,11 +162,15 @@ contains
     ! local variables
     !-----------------------------------------------------------------
     ! number of vertices on meshes
-    integer, pointer :: nCellsSolve, nCellsSolve_btr
+    integer, pointer :: nCellsSolve_bc, nCellsSolve_btr
 
     ! edge tangent vectors for calculating cell-centered quantities
-    real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors
+    real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors_bc
     real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors_btr
+
+    ! iMOAB variables
+    integer :: partScheme = 0 ! trivial partitioner
+    integer :: context_id
 
     ! End preamble
     !-----------------------------------------------------------------
@@ -163,7 +178,7 @@ contains
 
     ! get configuration to see if we are using the mode splitting, if not return
     call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
-       config_spatial_mode_splitting)
+                              config_spatial_mode_splitting)
     if (.not. config_spatial_mode_splitting) then
        return
     endif
@@ -182,20 +197,24 @@ contains
 
        call init_moab_mpas(domain, cmpbc, cmpbcPID)
 
-       ! allocate barotropicForcingX, barotropicForcingY, barotropicForcingZ for baroclinic
+       ! get mpi communicator for baroclinic domain
+       bcComm => domain % dminfo % comm
+       call mpi_comm_group(bcComm, bcGroup, ierr)
+
+       ! allocate barotropicForcingX_bc, barotropicForcingY_bc, barotropicForcingZ_bc for baroclinic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-       allocate ( barotropicForcingX(nCellsSolve),&
-                  barotropicForcingY(nCellsSolve),&
-                  barotropicForcingZ(nCellsSolve) )
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+       allocate ( barotropicForcingX_bc(nCellsSolve_bc),&
+                  barotropicForcingY_bc(nCellsSolve_bc),&
+                  barotropicForcingZ_bc(nCellsSolve_bc) )
 
        ! initialize reconstruction routines to go from edge based quantities to cell 
        ! centered quantities
-       call mpas_pool_get_array(meshPool, 'edgeTangentVectors', edgeTangentVectors)
+       call mpas_pool_get_array(meshPool, 'edgeTangentVectors', edgeTangentVectors_bc)
        call mpas_rbf_interp_initialize(meshPool)
-       call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors)
+       call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_bc)
        call mpas_init_reconstruct(meshPool)
        return
     elseif ( domain % domainID .eq. 1 ) then
@@ -206,14 +225,18 @@ contains
 
        call init_moab_mpas(domain, cmpbtr, cmpbtrPID)
 
+       ! get mpi communicator for barotropic domain
+       btrComm => domain % dminfo % comm
+       call mpi_comm_group(btrComm, btrGroup, ierr)
+
        ! allocate barotropicThicknessFluxX, etc. for barotropic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-       allocate ( barotropicThicknessFluxX_btr(nCellsSolve),&
-                  barotropicThicknessFluxY_btr(nCellsSolve),&
-                  barotropicThicknessFluxZ_btr(nCellsSolve) )
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+       allocate ( barotropicThicknessFluxX_btr(nCellsSolve_btr),&
+                  barotropicThicknessFluxY_btr(nCellsSolve_btr),&
+                  barotropicThicknessFluxZ_btr(nCellsSolve_btr) )
 
        ! initialize reconstruction routines to go from edge based quantities to cell 
        ! centered quantities
@@ -223,31 +246,144 @@ contains
        call mpas_init_reconstruct(meshPool)
     endif
 
-    ! once both the baroclinic and barotropic meshes are registered in moab, we need to calculate
-    ! the overlap meshes and compute the weights for interpolation as well as define our tags
-
     !--------------------------------------------------------------------
-    ! baroclinic => barotropic
+    ! define communicator groups
     !--------------------------------------------------------------------
 
-    ! register baroclinic to barotropic application
+    ! setup mpi communicators for coupler domains
+    cplComm    = MPI_COMM_NULL
+    bcCouComm  = MPI_COMM_NULL
+    btrCouComm = MPI_COMM_NULL
+    call mpi_comm_dup(domain % dminfo % comm, &
+                      cplComm, ierr)
+    call mpi_comm_dup(domain % dminfo % comm, &
+                      bcCouComm, ierr)
+    call mpi_comm_dup(domain % dminfo % comm, &
+                      btrCouComm, ierr)
+
+    ! coupler group
+    call mpi_comm_group(cplComm, cplGroup, ierr)
+
+    ! register coupler applications
+
+    ! baroclinic coupler
+    appname = 'bcCouple'//C_NULL_CHAR
+    ierr = iMOAB_RegisterApplication(appname,&
+                                     cplComm, &
+                                     cplbc, &
+                                     cplbcPID)
+    call errorout(ierr, "failed to register baroclinic coupler application")
+
+    ! barotropic coupler
+    appname = 'btCouple'//C_NULL_CHAR
+    ierr = iMOAB_RegisterApplication(appname,&
+                                     cplComm, &
+                                     cplbtr, &
+                                     cplbtrPID)
+    call errorout(ierr, "failed to register barotropic coupler application")
+
+    ! register baroclinic to barotropic application on coupler
     appname = 'bc2btr_cpl'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname, &
-                                     domain % dminfo % comm, &
+                                     cplComm, &
                                      bc2btrid, &
                                      bc2btrPID)
     call errorout(ierr, "failed to register baroclinic to barotropic application")
 
-    ! compute baroclinic to barotropic intersection
-    ierr = iMOAB_ComputeMeshIntersectionOnSphere(cmpbcPID,&
-                                                 cmpbtrPID, &
-                                                 bc2btrPID)
-    call errorout(ierr,"failed to compute intersection of baroclinic to barotropic mesh")
+    ! register barotropic to baroclinic application on coupler
+    appname = 'btr2bc_cpl'//C_NULL_CHAR
+    ierr = iMOAB_RegisterApplication(appname, &
+                                     cplComm, &
+                                     btr2bcid, &
+                                     btr2bcPID)
+    call errorout(ierr, "failed to register barotropic to baroclinic application")
+
+    !--------------------------------------------------------------------
+    ! send baroclinic and barotropic meshes to the coupler
+    !--------------------------------------------------------------------
+
+    ! baroclinic
+    if (bcComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_SendMesh(cmpbcPID, bcCouComm, cplGroup, cplbc, partScheme)
+       call errorout(ierr, "failed to send baroclinic to coupler")
+    endif
+    if (cplComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_ReceiveMesh(cplbcPID, bcCouComm, bcGroup, cmpbc)
+       call errorout(ierr,"failed to receive baroclinic on coupler")
+    endif
+
+    ! free send buffers
+    if (bcComm .ne. MPI_COMM_NULL) then
+       context_id = cplbc
+       ierr = iMOAB_FreeSenderBuffers(cmpbcPID, context_id)
+    endif
+
+    ! barotropic
+    if (btrComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_SendMesh(cmpbtrPID, btrCouComm, cplGroup, cplbtr, partScheme)
+       call errorout(ierr, "failed to send barotropic to coupler")
+    endif
+    if (cplComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_ReceiveMesh(cplbtrPID, btrCouComm, btrGroup, cmpbtr)
+       call errorout(ierr,"failed to receive baroclinic on coupler")
+    endif
+
+    ! free send buffers
+    if (btrComm .ne. MPI_COMM_NULL) then
+       context_id = cplbtr
+       ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, context_id)
+    endif
+
+    ! once both the baroclinic and barotropic meshes are registered in moab, we need to calculate
+    ! the overlap meshes and compute the weights for interpolation as well as define our tags
+
+    !--------------------------------------------------------------------
+    ! compute mesh intersections on coupler
+    !--------------------------------------------------------------------
+
+    if (cplComm .ne. MPI_COMM_NULL) then
+       ! baroclinic to barotropic
+       ierr = iMOAB_ComputeMeshIntersectionOnSphere(cplbcPID,&
+                                                    cplbtrPID, &
+                                                    bc2btrPID)
+       call errorout(ierr,"failed to compute intersection of baroclinic to barotropic mesh")
+
+       ! baroclinic to barotropic
+       ierr = iMOAB_ComputeMeshIntersectionOnSphere(cplbtrPID,&
+                                                    cplbcPID, &
+                                                    btr2bcPID)
+       call errorout(ierr,"failed to compute intersection of barotropic to baroclinic mesh")
+    endif
+
+    !--------------------------------------------------------------------
+    ! calculate coverage graphs on bcComm and btrComm
+    !--------------------------------------------------------------------
+
+    ! baroclinic coverage graph
+    if (bcComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_CoverageGraph(bcCouComm, cmpbcPID, cplbcPID, bc2btrPID, &
+                                  cmpbc, cplbc, cplbtr)
+       call errorout(ierr, "failed to compute coverage graph for baroclinic")
+    endif
+
+    ! barotropic coverage graph
+    if (btrComm .ne. MPI_COMM_NULL) then
+       ierr = iMOAB_CoverageGraph(btrCouComm, cmpbtrPID, cplbtrPID, btr2bcPID, &
+                                  cmpbtr, cplbtr, cplbc)
+       call errorout(ierr, "failed to compute coverage graph for baroclinic")
+    endif
+
+    !--------------------------------------------------------------------
+    ! compute scalar projection weights
+    !--------------------------------------------------------------------
 
     ! get projection weights for baroclinic to barotropic. Note that both domains are finite
     ! volume discretizations with the same discretization order. Due to this we just use the
     ! same variables for both source and target mesh
+
+    ! iMOAB variables for calculating the weights
     bc2btr_weights_identifier = 'bc2btr'//C_NULL_CHAR
+    btr2bc_weights_identifier = 'btr2bc'//C_NULL_CHAR
     disc_method = 'fv'//C_NULL_CHAR
     fv_method = ''//C_NULL_CHAR ! not sure what this is for, figure it out later
     disc_order = 1
@@ -259,85 +395,142 @@ contains
     fValidate = 0
     fInverseDistanceMap = 0
 
-    ierr = iMOAB_ComputeScalarProjectionWeights(bc2btrPID, &
-                                                bc2btr_weights_identifier, &
-                                                disc_method, &
-                                                disc_order, &
-                                                disc_method, &
-                                                disc_order, &
-                                                fv_method, &
-                                                fNoBubble, &
-                                                fMonotoneTypeID, &
-                                                fVolumetric, &
-                                                fInverseDistanceMap, &
-                                                fNoConserve, &
-                                                fValidate, &
-                                                dof_tag_names, &
-                                                dof_tag_names)
-    call errorout(ierr, "falied to compute weights for baroclinic to barotropic remapping")
+    if (cplComm .ne. MPI_COMM_NULL) then
 
-    !--------------------------------------------------------------------
-    ! barotropic => baroclinic
-    !--------------------------------------------------------------------
+       ! baroclinic => barotropic
+       ierr = iMOAB_ComputeScalarProjectionWeights(bc2btrPID, &
+                                                   bc2btr_weights_identifier, &
+                                                   disc_method, &
+                                                   disc_order, &
+                                                   disc_method, &
+                                                   disc_order, &
+                                                   fv_method, &
+                                                   fNoBubble, &
+                                                   fMonotoneTypeID, &
+                                                   fVolumetric, &
+                                                   fInverseDistanceMap, &
+                                                   fNoConserve, &
+                                                   fValidate, &
+                                                   dof_tag_names, &
+                                                   dof_tag_names)
+       call errorout(ierr, "falied to compute weights for baroclinic to barotropic remapping")
 
-    ! register barotropic to baroclinic application
-    appname = 'btr2bc_cpl'//C_NULL_CHAR
-    ierr = iMOAB_RegisterApplication(appname, &
-                                     domain % dminfo % comm, &
-                                     btr2bcid, &
-                                     btr2bcPID)
-    call errorout(ierr, "failed to register barotropic to baroclinic application")
-
-    ! compute baroclinic to barotropic intersection
-    ierr = iMOAB_ComputeMeshIntersectionOnSphere(cmpbtrPID,&
-                                                 cmpbcPID, &
-                                                 btr2bcPID)
-    call errorout(ierr,"failed to compute intersection of barotropic to baroclinic mesh")
-
-    ! get projection weights for baroclinic to barotropic. Note that both domains are finite
-    ! volume discretizations with the same discretization order. Due to this we just use the
-    ! same variables for both source and target mesh
-    btr2bc_weights_identifier = 'btr2bc'//C_NULL_CHAR
-    ierr = iMOAB_ComputeScalarProjectionWeights(btr2bcPID, &
-                                                btr2bc_weights_identifier, &
-                                                disc_method, &
-                                                disc_order, &
-                                                disc_method, &
-                                                disc_order, &
-                                                fv_method, &
-                                                fNoBubble, &
-                                                fMonotoneTypeID, &
-                                                fVolumetric, &
-                                                fInverseDistanceMap, &
-                                                fNoConserve, &
-                                                fValidate, &
-                                                dof_tag_names, &
-                                                dof_tag_names)
-    call errorout(ierr, "failed to compute weights for barotropic to baroclinic remapping")
+       ! barotropic => baroclinic
+       ierr = iMOAB_ComputeScalarProjectionWeights(btr2bcPID, &
+                                                   btr2bc_weights_identifier, &
+                                                   disc_method, &
+                                                   disc_order, &
+                                                   disc_method, &
+                                                   disc_order, &
+                                                   fv_method, &
+                                                   fNoBubble, &
+                                                   fMonotoneTypeID, &
+                                                   fVolumetric, &
+                                                   fInverseDistanceMap, &
+                                                   fNoConserve, &
+                                                   fValidate, &
+                                                   dof_tag_names, &
+                                                   dof_tag_names)
+       call errorout(ierr, "failed to compute weights for barotropic to baroclinic remapping")
+    endif
 
     !--------------------------------------------------------------------
     ! define tags on meshes
     !--------------------------------------------------------------------
 
-    ! define baroclinic to barotropic variables on baroclinic mesh
-    bc2btrTypes(:) = 1 ! DENSE_DOUBLE
-    bc2btrFields = 'barotropicForcingZonal:barotropicForcingMeridional'//C_NULL_CHAR
-    ierr = iMOAB_DefineTagStorage(cmpbcPID, &
-                                  bc2btrFields, &
-                                  bc2btrTypes(1), &
-                                  1, &
-                                  bc2btrIndices(1))
-    call errorout(ierr, "failed to define bc2btr tags on bc mesh")
+    ! all field types are dense double
+    bc2btrTypes(:)    = 1 ! DENSE_DOUBLE
+    btr2bcTypes(:)    = 1 ! DENSE_DOUBLE
+    bc2btrTypesCou(:) = 1
+    btr2bcTypesCou(:) = 1
 
-    ! define barotropic to baroclinic variables on baroclinic mesh
-    btr2bcTypes(:) = 1 ! DENSE_DOUBLE
-    btr2bcFields = 'barotropicThicknessFluxZonal:barotropicThicknessFluxMeridional'//C_NULL_CHAR
-    ierr = iMOAB_DefineTagStorage(cmpbcPID, &
-                                  btr2bcFields, &
-                                  btr2bcTypes(1), &
-                                  1, &
-                                  btr2bcIndices(1))
-    call errorout(ierr, "failed to define btr2bc tags on bc mesh")
+    ! baroclinic to barotropic fields
+    bc2btrFields     = &
+      'barotropicForcingZonal_bc:barotropicForcingMeridional_bc'//C_NULL_CHAR
+    bc2btrFields_btr = &
+      'barotropicForcingZonal_btr:barotropicForcingMeridional_btr'//C_NULL_CHAR
+
+    ! barotropic to baroclinic fields
+    btr2bcFields     = &
+      'barotropicThicknessFluxZonal_bc:barotropicThicknessFluxMeridional_bc'//C_NULL_CHAR
+    btr2bcFields_btr = &
+      'barotropicThicknessFluxZonal_btr:barotropicThicknessFluxMeridional_btr'//C_NULL_CHAR
+
+    ! define tags on bcComm
+    if (bcComm .ne. MPI_COMM_NULL) then
+
+       ! baroclinic to barotropic ON baroclinic
+       ierr = iMOAB_DefineTagStorage(cmpbcPID, &
+                                     bc2btrFields, &
+                                     bc2btrTypes(1), &
+                                     1, &
+                                     bc2btrIndices(1))
+       call errorout(ierr, "failed to define bc2btr tags on bc mesh")
+
+       ! barotropic to baroclinic ON baroclinic
+       ierr = iMOAB_DefineTagStorage(cmpbcPID, &
+                                     btr2bcFields, &
+                                     btr2bcTypes(1), &
+                                     1, &
+                                     btr2bcIndices(1))
+       call errorout(ierr, "failed to define btr2bc tags on bc mesh")
+    endif
+
+    ! define tags on btrComm
+    if (btrComm .ne. MPI_COMM_NULL) then
+
+       ! baroclinic to barotropic ON barotropic
+       ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
+                                     bc2btrFields_btr, &
+                                     bc2btrTypes(2), &
+                                     1, &
+                                     bc2btrIndices(2))
+       call errorout(ierr, "failed to define bc2btr tags on btr mesh")
+
+       ! barotropic to baroclinic ON barotropic
+       ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
+                                     btr2bcFields_btr, &
+                                     btr2bcTypes(2), &
+                                     1, &
+                                     btr2bcIndices(2))
+       call errorout(ierr, "failed to define btr2bc tags on btr mesh")
+    endif
+
+    ! define tags on cplComm
+    if (cplComm .ne. MPI_COMM_NULL) then
+
+       ! baroclinic to barotropic ON baroclinic
+       ierr = iMOAB_DefineTagStorage(cplbcPID, &
+                                     bc2btrFields, &
+                                     bc2btrTypesCou(1), &
+                                     1, &
+                                     bc2btrIndicesCou(1))
+       call errorout(ierr, "failed to define bc2btr tags on bc mesh (coupler)")
+
+       ! barotropic to baroclinic ON baroclinic
+       ierr = iMOAB_DefineTagStorage(cplbcPID, &
+                                     btr2bcFields, &
+                                     btr2bcTypesCou(1), &
+                                     1, &
+                                     btr2bcIndicesCou(1))
+       call errorout(ierr, "failed to define btr2bc tags on bc mesh (coupler)")
+
+       ! baroclinic to barotropic ON barotropic
+       ierr = iMOAB_DefineTagStorage(cplbtrPID, &
+                                     bc2btrFields_btr, &
+                                     bc2btrTypesCou(2), &
+                                     1, &
+                                     bc2btrIndicesCou(2))
+       call errorout(ierr, "failed to define bc2btr tags on btr mesh (coupler)")
+
+       ! barotropic to baroclinic ON barotropic
+       ierr = iMOAB_DefineTagStorage(cplbtrPID, &
+                                     btr2bcFields_btr, &
+                                     btr2bcTypesCou(2), &
+                                     1, &
+                                     btr2bcIndicesCou(2))
+       call errorout(ierr, "failed to define btr2bc tags on btr mesh")
+    endif
 
     ! initialize buffers for transmitting the data (both baroclinic to barotropic and
     ! baroclinic to barotropic while we have the mesh size)
@@ -347,29 +540,12 @@ contains
     bc2btrVar(:) = 0d0
     btr2bcVar(:) = 0d0
 
-    ! define baroclinic to barotropic variables on barotropic mesh
-    bc2btrFields_btr = 'barotropicForcingZonal_btr:barotropicForcingMeridional_btr'//C_NULL_CHAR
-    ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
-                                  bc2btrFields_btr, &
-                                  bc2btrTypes(2),&
-                                  1, &
-                                  bc2btrIndices(2))
-    call errorout(ierr, "failed to define bc2btr tags on btr mesh")
-
-    ! define barotropic to baroclinic variables on barotropic mesh
-    btr2bcFields_btr = &
-      'barotropicThicknessFluxZonal_btr:barotropicThicknessFluxMeridional_btr'//C_NULL_CHAR
-    ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
-                                  btr2bcFields_btr, &
-                                  btr2bcTypes(2), &
-                                  1, &
-                                  btr2bcIndices(2))
-    call errorout(ierr, "failed to define btr2bc tags on btr mesh")
-
     ! initialize buffers for transmitting data from barotropic to baroclinic mesh
     ierr = iMOAB_GetMeshInfo(cmpbtrPID, nverts, nelem, nblocks, nsbc, ndbc)
     call errorout(ierr, "failed to retrieve mesh info from barotropic mesh")
     allocate ( bc2btrVar_btr(2*nelem(3)), btr2bcVar_btr(2*nelem(3)) )
+    bc2btrVar_btr(:) = 0d0
+    btr2bcVar_btr(:) = 0d0
 #endif
     !--------------------------------------------------------------------
 
@@ -393,6 +569,10 @@ contains
     !-----------------------------------------------------------------
     ! input variables
     !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
     type(domain_type), intent(inout) :: domain
 
     !-----------------------------------------------------------------
@@ -402,26 +582,29 @@ contains
     !-----------------------------------------------------------------
     ! local variables
     !-----------------------------------------------------------------
+    ! domain pointer for barotropic domain
     type (domain_type), pointer :: domain_btr
+    ! configuration info
+    logical, pointer :: config_spatial_mode_splitting
     ! 
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     ! mesh information
-    integer, pointer :: nCellsSolve, nCellsSolve_btr,&
-                        nEdgesSolve, nEdgesSolve_btr
+    integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
+                        nEdgesSolve_bc, nEdgesSolve_btr
     ! arrays for storing data
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcing,&
+    real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
                                                 barotropicForcing_btr,&
-                                                barotropicForcingZonal,&
+                                                barotropicForcingZonal_bc,&
                                                 barotropicForcingZonal_btr,&
-                                                barotropicForcingMeridional,&
+                                                barotropicForcingMeridional_bc,&
                                                 barotropicForcingMeridional_btr
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
-    real (kind=RKIND), dimension(:), pointer :: angleEdge
-    integer, dimension(:,:), pointer :: cellsOnEdge
+    real (kind=RKIND), dimension(:), pointer :: angleEdge_btr
+    integer, dimension(:,:), pointer :: cellsOnEdge_btr
     ! looping variables
     integer :: iCell, iEdge
     ! error handling
@@ -433,7 +616,7 @@ contains
 
     ! get configuration to see if we are using the mode splitting, if not return
     call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
-       config_spatial_mode_splitting)
+                              config_spatial_mode_splitting)
     if (.not. config_spatial_mode_splitting) then
        return
     endif
@@ -455,41 +638,95 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
         ! get barotropicForcing from 
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing)
+        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingZonal',&
-                                 barotropicForcingZonal)
+                                 barotropicForcingZonal_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
-                                 barotropicForcingMeridional)
+                                 barotropicForcingMeridional_bc)
 
         ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicForcing, &
-                              barotropicForcingX, barotropicForcingY, barotropicForcingZ, &
-                              barotropicForcingZonal, barotropicForcingMeridional)
+        call mpas_reconstruct(meshPool, barotropicForcing_bc, &
+                              barotropicForcingX_bc, &
+                              barotropicForcingY_bc, &
+                              barotropicForcingZ_bc, &
+                              barotropicForcingZonal_bc, &
+                              barotropicForcingMeridional_bc)
 
         ! pack buffers for iMOAB
-        do iCell = 1,nCellsSolve
-            bc2btrVar(iCell) = barotropicForcingZonal(iCell)
-            bc2btrVar(iCell+nCellsSolve) = barotropicForcingMeridional(iCell)
+        do iCell = 1,nCellsSolve_bc
+            bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
+            bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
         enddo
 
-        ! put buffers into moab structure
-        ierr=iMOAB_SetDoubleTagStorage(cmpbcPID,&
-                                       bc2btrFields,&
-                                       2*nCellsSolve,&
-                                       1,&
-                                       bc2btrVar)
-        call errorout(ierr,"failed to assign bc2btr data to baroclinic mesh")
+        ! assign data to baroclinic mesh on compute processor 
+        if (bcComm .ne. MPI_COMM_NULL) then
 
-        ! do remapping
-        ierr = iMOAB_ApplyScalarProjectionWeights(bc2btrPID,&
-                                                  bc2btr_weights_identifier,&
-                                                  bc2btrFields,&
-                                                  bc2btrFields_btr)
-        call errorout(ierr,"failed to reproject bc2btr data to barotropic mesh")
+           ! assign values to moab
+           ierr=iMOAB_SetDoubleTagStorage(cmpbcPID,&
+                                          bc2btrFields,&
+                                          2*nCellsSolve_bc,&
+                                          1,&
+                                          bc2btrVar)
+           call errorout(ierr,"failed to assign bc2btr data to baroclinic mesh")
+
+           ! send element tag
+           ierr = iMOAB_SendElementTag(cmpbcPID,&
+                                       bc2btrFields,&
+                                       bcCouComm,&
+                                       cplbtr)
+           call errorout(ierr,"failed to send bc2btr data tag")
+        endif
+
+        ! receive data on coupler
+        if (cplComm .ne. MPI_COMM_NULL) then
+           
+           ! receive data
+           ierr = iMOAB_ReceiveElementTag(cplbcPID,&
+                                          bc2btrFields,&
+                                          bcCouComm,&
+                                          cplbtr)
+           call errorout(ierr,"failed to receive bc2btr data tag")
+        endif
+
+        ! free send buffers
+        if (bcComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_FreeSenderBuffers(cmpbcPID, cplbtr)
+           call errorout(ierr,"failed to free send buffers")
+        endif
+
+        ! do remapping on coupler
+        if (cplComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ApplyScalarProjectionWeights(bc2btrPID,&
+                                                     bc2btr_weights_identifier,&
+                                                     bc2btrFields,&
+                                                     bc2btrFields_btr)
+           call errorout(ierr,"failed to reproject bc2btr data to barotropic mesh")
+
+           ! send data to cmpbtr
+           ierr = iMOAB_SendElementTag(cplbtrPID, &
+                                       bc2btrFields_btr, &
+                                       btrCouComm, cmpbtr)
+           call errorout(ierr,"failed to send bc2btr_btr tags")
+        endif
+
+        ! receive data from coupler on barotropic
+        if (btrComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ReceiveElementTag(cmpbtrPID, &
+                                          bc2btrFields_btr, &
+                                          btrCouComm, &
+                                          cplbtr)
+           call errorout(ierr,"failed to receive bc2btr_btr tags")
+        endif
+
+        ! free send buffers
+        if (cplComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_FreeSenderBuffers(cplbtrPID, cmpbtr)
+           call errorout(ierr,"failed to free send buffers")
+        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -514,8 +751,8 @@ contains
                                  barotropicForcingZonal_btr)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
                                  barotropicForcingMeridional_btr)
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge)
+        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_btr)
+        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_btr)
 
         ! get remapped data from iMOAB
         ierr = iMOAB_GetDoubleTagStorage(cmpbtrPID,&
@@ -534,15 +771,15 @@ contains
         ! put back into edge based arrays
         barotropicForcing_btr(:) = 0d0
         do iEdge = 1,nEdgesSolve_btr
-            cell1 = cellsOnEdge(1, iEdge)
-            cell2 = cellsOnEdge(2, iEdge)
+            cell1 = cellsOnEdge_btr(1, iEdge)
+            cell2 = cellsOnEdge_btr(2, iEdge)
             zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
                                   barotropicForcingZonal_btr(cell2))
             meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
                                        barotropicForcingMeridional_btr(cell2))
             barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
-                                           cos(angleEdge(iEdge))*zonal_edge + &
-                                           sin(angleEdge(iEdge))*meridional_edge
+                                           cos(angleEdge_btr(iEdge))*zonal_edge + &
+                                           sin(angleEdge_btr(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo
@@ -577,29 +814,32 @@ contains
     !-----------------------------------------------------------------
     ! local variables
     !-----------------------------------------------------------------
+    ! domain pointer for barotropic domain
     type (domain_type), pointer :: domain_btr
+    ! configuration info
+    logical, pointer :: config_spatial_mode_splitting
     ! 
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
 
     ! mesh information
-    integer, pointer :: nCellsSolve, nCellsSolve_btr,&
-                        nEdgesSolve, nEdgesSolve_btr
+    integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
+                        nEdgesSolve_bc, nEdgesSolve_btr
 
     ! arrays for storing data
-    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux,&
+    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
                                                 barotropicThicknessFlux_btr,&
-                                                barotropicThicknessFluxZonal,&
+                                                barotropicThicknessFluxZonal_bc,&
                                                 barotropicThicknessFluxZonal_btr,&
-                                                barotropicThicknessFluxMeridional,&
+                                                barotropicThicknessFluxMeridional_bc,&
                                                 barotropicThicknessFluxMeridional_btr
 
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
-    real (kind=RKIND), dimension(:), pointer :: angleEdge
-    integer, dimension(:,:), pointer :: cellsOnEdge
+    real (kind=RKIND), dimension(:), pointer :: angleEdge_bc
+    integer, dimension(:,:), pointer :: cellsOnEdge_bc
 
     ! looping variables
     integer :: iCell, iEdge
@@ -613,7 +853,7 @@ contains
 
     ! get configuration to see if we are using the mode splitting, if not return
     call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
-       config_spatial_mode_splitting)
+                              config_spatial_mode_splitting)
     if (.not. config_spatial_mode_splitting) then
        return
     endif
@@ -660,19 +900,65 @@ contains
             btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
         enddo
 
-        ! put buffers into moab structure
-        ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
-                                         btr2bcFields_btr,&
-                                         2*nCellsSolve_btr,&
-                                         1,&
-                                         btr2bcVar_btr)
-        call errorout(ierr,"failed to assign btr2bc data to barotropic mesh")
+        ! assign data to barotropic mesh on compute processor
+        if (btrComm .ne. MPI_COMM_NULL) then
+
+           ! assign values to moab
+           ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
+                                            btr2bcFields_btr,&
+                                            2*nCellsSolve_btr,&
+                                            1,&
+                                            btr2bcVar_btr)
+           call errorout(ierr,"failed to assign btr2bcFields_btr to barotropic mesh")
+
+           ! send element tag
+           ierr = iMOAB_SendElementTag(cmpbtrPID,&
+                                       btr2bcFields_btr,&
+                                       btrCouComm,&
+                                       cplbc)
+           call errorout(ierr,"failed to send btr2bcFields_btr to coupler")
+        endif
+
+        ! receive data on coupler
+        if (cplComm .ne. MPI_COMM_NULL) then
+           
+           ! receive data
+           ierr = iMOAB_ReceiveElementTag(cplbtrPID,&
+                                          btr2bcFields_btr,&
+                                          btrCouComm,&
+                                          cplbc)
+           call errorout(ierr,"failed to receive btr2bcFields_btr on coupler")
+        endif
+
+        ! free send buffers
+        if (btrComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
+           call errorout(ierr,"failed to free send buffers")
+        endif
 
         ! do remapping
-        ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
-                                                  btr2bc_weights_identifier,&
-                                                  btr2bcFields_btr,&
-                                                  btr2bcFields)
+        if (cplComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
+                                                     btr2bc_weights_identifier,&
+                                                     btr2bcFields_btr,&
+                                                     btr2bcFields)
+           call errorout(ierr,"failed to reproject btr2bc data to baroclinic mesh")
+
+           ! send data to cmpbc
+           ierr = iMOAB_SendElementTag(cplbcPID,&
+                                       btr2bcFields, &
+                                       bcCouComm,cmpbc)
+           call errorout(ierr,"failed to send btr2bcFields")
+        endif
+
+        ! receive data from coupler on baroclinic
+        if (bcComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ReceiveElementTag(cmpbcPID,&
+                                          btr2bcFields,&
+                                          bcCouComm,&
+                                          cplbc)
+           call errorout(ierr,"failed to receive btr2bcFields")
+        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -688,50 +974,524 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
-                                 barotropicThicknessFlux)
+                                 barotropicThicknessFlux_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal)
+                                 barotropicThicknessFluxZonal_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional)
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge)
+                                 barotropicThicknessFluxMeridional_bc)
+        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
+        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
 
         ! get remapped data from iMOAB
         ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
                                          btr2bcFields,&
-                                         2*nCellsSolve,&
+                                         2*nCellsSolve_bc,&
                                          1,&
                                          btr2bcVar)
         call errorout(ierr,"failed to get btr2bcVar from iMOAB")
 
         ! unpack buffers
-        do iCell = 1,nCellsSolve
-            barotropicThicknessFluxZonal(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional(iCell) = btr2bcVar(iCell+nCellsSolve)
+        do iCell = 1,nCellsSolve_bc
+            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
+            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
         enddo
 
         ! put into edge-based arrays
-        barotropicThicknessFlux(:)=0d0
-        do iEdge = 1,nEdgesSolve
-           cell1 = cellsOnEdge(1, iEdge)
-           cell2 = cellsOnEdge(2,iEdge)
-           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal(cell1) + &
-                                 barotropicThicknessFluxZonal(cell2))
-           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional(cell1) + &
-                                      barotropicThicknessFluxMeridional(cell2))
-           barotropicThicknessFlux(iEdge) = barotropicThicknessFlux(iEdge) + &
-                                            cos(angleEdge(iEdge))*zonal_edge + &
-                                            sin(angleEdge(iEdge))*meridional_edge
+        barotropicThicknessFlux_bc(:)=0d0
+        do iEdge = 1,nEdgesSolve_bc
+           cell1 = cellsOnEdge_bc(1, iEdge)
+           cell2 = cellsOnEdge_bc(2,iEdge)
+           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
+                                 barotropicThicknessFluxZonal_bc(cell2))
+           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
+                                      barotropicThicknessFluxMeridional_bc(cell2))
+           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
+                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
+                                            sin(angleEdge_bc(iEdge))*meridional_edge
         enddo
         block_ptr => block_ptr % next
     enddo
 #endif
     end subroutine ocn_spatial_mode_splitting_btr2bc_remapping!}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_mesh_redirect
+!
+!> \brief redirects pointers for barotropic subcycling
+!> \author Coleman Blakely
+!> \date   April, 2024
+!> \details
+!> This subroutine redirects the pointers to various arrays, values, etc.
+!> between the barotropic and baroclinic domains for spatial mode 
+!> splitting.
+!
+!-----------------------------------------------------------------------
+
+!    subroutine ocn_spatial_mode_splitting_mesh_redirect(domain) !{{{
+!
+!    !-----------------------------------------------------------------
+!    ! input variables
+!    !-----------------------------------------------------------------
+!
+!    !-----------------------------------------------------------------
+!    ! input/output variables
+!    !-----------------------------------------------------------------
+!    type(domain_type), intent(inout) :: domain
+!    ! type(mpas_pool_type), intent(inout) :: statePool,&
+!    !                                        forcingPool,&
+!    !                                        tendPool
+!    !
+!    ! ! statePool
+!    ! real (kind=RKIND), intent(inout), dimension(:) :: sshCur,&
+!    !                                                   normalBarotropicVelocityCur,&
+!    !                                                   normalBarotropicVelocityNew
+!    !                                                   
+!    ! ! tendPool
+!    ! real (kind=RKIND), intent(inout), dimension(:) :: sshTend
+!
+!    !-----------------------------------------------------------------
+!    ! output variables
+!    !-----------------------------------------------------------------
+!
+!    !-----------------------------------------------------------------
+!    ! local variables
+!    !-----------------------------------------------------------------
+!
+!    type(block_type), pointer :: block  ! variables in current subblock
+!
+!    type(mpas_pool_type), pointer :: meshPool                 ! mesh variables in MPAS pool structure
+!
+!    ! scalar pointers for retrieval, but convert to actual scalars in struct
+!    logical, pointer :: on_a_sphere
+!
+!    real (kind=RKIND), pointer :: sphere_radius
+!
+!    integer, pointer :: nCellsTmp, &
+!                        nEdgesTmp, &
+!                        nVerticesTmp, &
+!                        maxEdgesTmp, &
+!                        maxEdges2Tmp, &
+!                        vertexDegreeTmp, &
+!                        nVertLevelsTmp, &
+!                        nVertLevelsP1Tmp
+!
+!    ! temporary pointers for converting index arrays
+!    integer, dimension(:), pointer :: nCellsArrayTmp, &
+!                                      nEdgesArrayTmp, &
+!                                      nVerticesArrayTmp
+!
+!    ! temporary pointers for converting masks
+!    integer i, k, n          ! loop indices
+!    integer, dimension(:, :), pointer :: edgeMaskTmp, &
+!                                         vertexMaskTmp, &
+!                                         cellMaskTmp, &
+!                                         edgeSignOnCellTmp, &
+!                                         edgeSignOnVertexTmp, &
+!                                         boundaryEdgeTmp, &
+!                                         boundaryVertexTmp, &
+!                                         boundaryCellTmp
+!
+!    ! End preamble
+!    !-----------------------------------------------------------------
+!    ! Begin code
+!
+!    block => domain%blocklist
+!
+!    ! retrieve the mpas mesh pool
+!    call mpas_pool_get_subpool(block%structs, 'mesh', meshPool)
+!
+!    !-----------------------------------------------------------------
+!    ! first set pointers/values for all mesh variables
+!    !-----------------------------------------------------------------
+!
+!    ! set all mesh dimensions
+!    call mpas_pool_get_dimension(meshPool, 'nCells', &
+!                                 nCellsTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nEdges', &
+!                                 nEdgesTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nVertices', &
+!                                 nVerticesTmp)
+!    call mpas_pool_get_dimension(meshPool, 'maxEdges', &
+!                                 maxEdgesTmp)
+!    call mpas_pool_get_dimension(meshPool, 'maxEdges2', &
+!                                 maxEdges2Tmp)
+!    call mpas_pool_get_dimension(meshPool, 'vertexDegree', &
+!                                 vertexDegreeTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nVertLevels', &
+!                                 nVertLevelsTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nVertLevelsP1', &
+!                                 nVertLevelsP1Tmp)
+!    call mpas_pool_get_dimension(meshPool, 'nCellsArray', &
+!                                 nCellsArrayTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nEdgesArray', &
+!                                 nEdgesArrayTmp)
+!    call mpas_pool_get_dimension(meshPool, 'nVerticesArray', &
+!                                 nVerticesArrayTmp)
+!
+!    ! translate scalar pointers to scalars in new mesh structure
+!    onSphere = on_a_sphere
+!    sphereRadius = sphere_radius
+!    maxEdges = maxEdgesTmp
+!    maxEdges2 = maxEdges2Tmp
+!    vertexDegree = vertexDegreeTmp
+!    nVertLevels = nVertLevelsTmp
+!    nVertLevelsP1 = nVertLevelsP1Tmp
+!
+!    ! convert previous index limits into new halo definitions
+!    nCellsAll = nCellsTmp
+!    nEdgesAll = nEdgesTmp
+!    nVerticesAll = nVerticesTmp
+!
+!    n = size(nCellsArrayTmp)
+!    allocate (nCellsHalo(n - 1))
+!    nCellsOwned = nCellsArrayTmp(1)
+!    do i = 2, n
+!       nCellsHalo(i - 1) = nCellsArrayTmp(i)
+!    end do
+!
+!    n = size(nEdgesArrayTmp)
+!    allocate (nEdgesHalo(n - 1))
+!    nEdgesOwned = nEdgesArrayTmp(1)
+!    do i = 2, n
+!       nEdgesHalo(i - 1) = nEdgesArrayTmp(i)
+!    end do
+!
+!    n = size(nVerticesArrayTmp)
+!    allocate (nVerticesHalo(n - 1))
+!    nVerticesOwned = nVerticesArrayTmp(1)
+!    do i = 2, n
+!       nVerticesHalo(i - 1) = nVerticesArrayTmp(i)
+!    end do
+!
+!    ! set pointers for a lot of connectivity info
+!    call mpas_pool_get_array(meshPool, 'nEdgesOnEdge', &
+!                             nEdgesOnEdge)
+!    call mpas_pool_get_array(meshPool, 'nEdgesOnCell', &
+!                             nEdgesOnCell)
+!    call mpas_pool_get_array(meshPool, 'minLevelCell', &
+!                             minLevelCell)
+!    call mpas_pool_get_array(meshPool, 'minLevelEdgeTop', &
+!                             minLevelEdgeTop)
+!    call mpas_pool_get_array(meshPool, 'minLevelEdgeBot', &
+!                             minLevelEdgeBot)
+!    call mpas_pool_get_array(meshPool, 'minLevelVertexTop', &
+!                             minLevelVertexTop)
+!    call mpas_pool_get_array(meshPool, 'minLevelVertexBot', &
+!                             minLevelVertexBot)
+!    call mpas_pool_get_array(meshPool, 'maxLevelCell', &
+!                             maxLevelCell)
+!    call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', &
+!                             maxLevelEdgeTop)
+!    call mpas_pool_get_array(meshPool, 'maxLevelEdgeBot', &
+!                          maxLevelEdgeBot)
+!    call mpas_pool_get_array(meshPool, 'maxLevelVertexTop', &
+!                             maxLevelVertexTop)
+!    call mpas_pool_get_array(meshPool, 'maxLevelVertexBot', &
+!                             maxLevelVertexBot)
+!    call mpas_pool_get_array(meshPool, 'indexToCellID', &
+!                             indexToCellID)
+!    call mpas_pool_get_array(meshPool, 'indexToEdgeID', &
+!                             indexToEdgeID)
+!    call mpas_pool_get_array(meshPool, 'indexToVertexID', &
+!                             indexToVertexID)
+!    call mpas_pool_get_array(meshPool, 'edgesOnEdge', &
+!                             edgesOnEdge)
+!    call mpas_pool_get_array(meshPool, 'cellsOnEdge', &
+!                             cellsOnEdge)
+!    call mpas_pool_get_array(meshPool, 'verticesOnEdge', &
+!                             verticesOnEdge)
+!    call mpas_pool_get_array(meshPool, 'cellsOnCell', &
+!                             cellsOnCell)
+!    call mpas_pool_get_array(meshPool, 'edgesOnCell', &
+!                             edgesOnCell)
+!    call mpas_pool_get_array(meshPool, 'verticesOnCell', &
+!                             verticesOnCell)
+!    call mpas_pool_get_array(meshPool, 'cellsOnVertex', &
+!                             cellsOnVertex)
+!    call mpas_pool_get_array(meshPool, 'edgesOnVertex', &
+!                             edgesOnVertex)
+!    call mpas_pool_get_array(meshPool, 'kiteIndexOnCell', &
+!                             kiteIndexOnCell)
+!
+!    ! now set a number of physics and numerical properties of mesh
+!    call mpas_pool_get_array(meshPool, 'latCell', &
+!                             latCell)
+!    call mpas_pool_get_array(meshPool, 'lonCell', &
+!                             lonCell)
+!    call mpas_pool_get_array(meshPool, 'xCell', &
+!                             xCell)
+!    call mpas_pool_get_array(meshPool, 'yCell', &
+!                             yCell)
+!    call mpas_pool_get_array(meshPool, 'zCell', &
+!                             zCell)
+!    call mpas_pool_get_array(meshPool, 'latEdge', &
+!                             latEdge)
+!    call mpas_pool_get_array(meshPool, 'lonEdge', &
+!                             lonEdge)
+!    call mpas_pool_get_array(meshPool, 'xEdge', &
+!                             xEdge)
+!    call mpas_pool_get_array(meshPool, 'yEdge', &
+!                             yEdge)
+!    call mpas_pool_get_array(meshPool, 'zEdge', &
+!                             zEdge)
+!    call mpas_pool_get_array(meshPool, 'latVertex', &
+!                             latVertex)
+!    call mpas_pool_get_array(meshPool, 'lonVertex', &
+!                             lonVertex)
+!    call mpas_pool_get_array(meshPool, 'xVertex', &
+!                             xVertex)
+!    call mpas_pool_get_array(meshPool, 'yVertex', &
+!                             yVertex)
+!    call mpas_pool_get_array(meshPool, 'zVertex', &
+!                             zVertex)
+!    call mpas_pool_get_array(meshPool, 'fEdge', &
+!                             fEdge)
+!    call mpas_pool_get_array(meshPool, 'fVertex', &
+!                             fVertex)
+!    call mpas_pool_get_array(meshPool, 'fCell', &
+!                             fCell)
+!    call mpas_pool_get_array(meshPool, 'dcEdge', &
+!                             dcEdge)
+!    call mpas_pool_get_array(meshPool, 'dvEdge', &
+!                             dvEdge)
+!    call mpas_pool_get_array(meshPool, 'areaCell', &
+!                             areaCell)
+!    call mpas_pool_get_array(meshPool, 'areaTriangle', &
+!                             areaTriangle)
+!    call mpas_pool_get_array(meshPool, 'weightsOnEdge', &
+!                             weightsOnEdge)
+!    call mpas_pool_get_array(meshPool, 'bottomDepth', &
+!                             bottomDepth)
+!    call mpas_pool_get_array(meshPool, 'refBottomDepth', &
+!                             refBottomDepth)
+!    call mpas_pool_get_array(meshPool, 'refBottomDepthTopOfCell', &
+!                             refBottomDepthTopOfCell)
+!    call mpas_pool_get_array(meshPool, 'vertCoordMovementWeights', &
+!                             vertCoordMovementWeights)
+!    call mpas_pool_get_array(meshPool, 'meshScalingDel2', &
+!                             meshScalingDel2)
+!    call mpas_pool_get_array(meshPool, 'meshScalingDel4', &
+!                             meshScalingDel4)
+!    call mpas_pool_get_array(meshPool, 'meshDensity', &
+!                             meshDensity)
+!    call mpas_pool_get_array(meshPool, 'angleEdge', &
+!                             angleEdge)
+!    call mpas_pool_get_array(meshPool, 'distanceToCoast', &
+!                             distanceToCoast)
+!
+!    call mpas_pool_get_array(meshPool, 'weightsOnEdge', &
+!                             weightsOnEdge)
+!    call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', &
+!                             kiteAreasOnVertex)
+!    call mpas_pool_get_array(meshPool, 'edgeTangentVectors', &
+!                             edgeTangentVectors)
+!    call mpas_pool_get_array(meshPool, 'edgeNormalVectors', &
+!                             edgeNormalVectors)
+!    call mpas_pool_get_array(meshPool, 'localVerticalUnitVectors', &
+!                             localVerticalUnitVectors)
+!    call mpas_pool_get_array(meshPool, 'cellTangentPlane', &
+!                             cellTangentPlane)
+!    call mpas_pool_get_array(meshPool, 'coeffs_reconstruct', &
+!                             coeffs_reconstruct)
+!
+!    ! For masks, we wish to convert to real multiplicative masks
+!    ! so retrieve integer version pointers and allocate real masks
+!    ! Once these are converted in Registry, we can eliminate this.
+!    call mpas_pool_get_array(meshPool, 'edgeMask', &
+!                             edgeMaskTmp)
+!    call mpas_pool_get_array(meshPool, 'vertexMask', &
+!                             vertexMaskTmp)
+!    call mpas_pool_get_array(meshPool, 'cellMask', &
+!                             cellMaskTmp)
+!    call mpas_pool_get_array(meshPool, 'edgeSignOnCell', &
+!                             edgeSignOnCellTmp)
+!    call mpas_pool_get_array(meshPool, 'edgeSignOnVertex', &
+!                             edgeSignOnVertexTmp)
+!    call mpas_pool_get_array(meshPool, 'boundaryEdge', &
+!                             boundaryEdgeTmp)
+!    call mpas_pool_get_array(meshPool, 'boundaryVertex', &
+!                             boundaryVertexTmp)
+!    call mpas_pool_get_array(meshPool, 'boundaryCell', &
+!                             boundaryCellTmp)
+!
+!    allocate ( &
+!          edgeMask(nVertLevels, nEdgesAll+1), &
+!          cellMask(nVertLevels, nCellsAll+1), &
+!          vertexMask(nVertLevels, nVerticesAll+1), &
+!          boundaryEdge(nVertLevels, nEdgesAll+1), &
+!          boundaryCell(nVertLevels, nCellsAll+1), &
+!          boundaryVertex(nVertLevels, nVerticesAll+1), &
+!          edgeSignOnCell(maxEdges, nCellsAll+1), &
+!          edgeSignOnVertex(maxEdges, nVerticesAll+1), &
+!          invAreaCell(nCellsAll+1))
+!
+!    !-----------------------------------------------------------------
+!    ! Now that all pointers are set and mesh variables allocated
+!    ! we initialize other mesh quantities
+!    !-----------------------------------------------------------------
+!
+!    ! Start by initializing vertical mesh, min/max cells and
+!    ! sign/index fields
+!    call ocn_meshVertCoordInit(domain)
+!    call ocn_meshMinMaxLevel()
+!    call ocn_meshSignIndexFields()
+!
+!    ! Compute max mesh density and mesh scaling
+!    if (config_maxMeshDensity < 0.0_RKIND) then
+!       maxDensityLocal = maxval(meshDensity)
+!       call mpas_dmpar_max_real(domain%dminfo, maxDensityLocal, &
+!                                               maxDensityGlobal)
+!       config_maxMeshDensity = maxDensityGlobal 
+!    endif
+!    call ocn_meshScaling()
+! 
+!    ! Routine calls above initialized the real mask arrays
+!    ! so convert the meshPool integer pointers here
+!    do n = 1, nCellsAll+1
+!    do k = 1, nVertLevels
+!       cellMaskTmp(k,n)     = nint(cellMask(k,n))
+!       boundaryCellTmp(k,n) = nint(boundaryCell(k,n))
+!    end do
+!    end do
+!
+!    do n = 1, nCellsAll+1
+!    do k = 1, maxEdges
+!       edgeSignOnCellTmp(k, n) = nint(edgeSignOnCell(k,n))
+!    end do
+!    end do
+!
+!    do n = 1, nEdgesAll+1
+!    do k = 1, nVertLevels
+!       edgeMaskTmp(k, n) = nint(edgeMask(k,n))
+!       boundaryEdgeTmp(k, n) = nint(boundaryEdge(k,n))
+!    end do
+!    end do
+!
+!    do n = 1, nVerticesAll+1
+!    do k = 1, nVertLevels
+!       vertexMaskTmp(k, n) = nint(vertexMask(k,n))
+!       boundaryVertexTmp(k, n) = nint(boundaryVertex(k,n))
+!    end do
+!    end do
+!
+!    do n = 1, nVerticesAll+1
+!    do k = 1, vertexDegree
+!       edgeSignOnVertexTmp(k,n) = nint(edgeSignOnVertex(k,n))
+!    end do
+!    end do
+!
+!    ! Compute area weighting for some interpolation
+!    call ocn_meshAreaWeights()
+!    areaCell(nCellsAll+1) = -1.0e34_RKIND
+!
+!    ! Compute the inverse of areaCell
+!    do n = 1, nCellsAll
+!       invAreaCell(n) = 1.0_RKIND / areaCell(n)
+!    end do
+!    invAreaCell(nCellsAll+1) = 0.0_RKIND
+!
+!    !-----------------------------------------------------------------
+!    ! Copy mesh data to accelerator if needed.
+!    !-----------------------------------------------------------------
+!
+!       !$acc enter data copyin( &
+!       !$acc                   onSphere,                 &
+!       !$acc                   sphereRadius,             &
+!       !$acc                   nCellsAll,                &
+!       !$acc                   nEdgesAll,                &
+!       !$acc                   nVerticesAll,             &
+!       !$acc                   nCellsOwned,              &
+!       !$acc                   nEdgesOwned,              &
+!       !$acc                   nVerticesOwned,           &
+!       !$acc                   maxEdges,                 &
+!       !$acc                   maxEdges2,                &
+!       !$acc                   vertexDegree,             &
+!       !$acc                   nVertLevels,              &
+!       !$acc                   nVertLevelsP1,            &
+!       !$acc                   nEdgesHalo,               &
+!       !$acc                   nCellsHalo,               &
+!       !$acc                   nVerticesHalo,            &
+!       !$acc                   nEdgesOnEdge,             &
+!       !$acc                   nEdgesOnCell,             &
+!       !$acc                   minLevelCell,             &
+!       !$acc                   minLevelEdgeTop,          &
+!       !$acc                   minLevelEdgeBot,          &
+!       !$acc                   minLevelVertexTop,        &
+!       !$acc                   minLevelVertexBot,        &
+!       !$acc                   maxLevelCell,             &
+!       !$acc                   maxLevelEdgeTop,          &
+!       !$acc                   maxLevelEdgeBot,          &
+!       !$acc                   maxLevelVertexTop,        &
+!       !$acc                   maxLevelVertexBot,        &
+!       !$acc                   indexToCellID,            &
+!       !$acc                   indexToEdgeID,            &
+!       !$acc                   indexToVertexID,          &
+!       !$acc                   edgesOnEdge,              &
+!       !$acc                   cellsOnEdge,              &
+!       !$acc                   verticesOnEdge,           &
+!       !$acc                   cellsOnCell,              &
+!       !$acc                   edgesOnCell,              &
+!       !$acc                   verticesOnCell,           &
+!       !$acc                   cellsOnVertex,            &
+!       !$acc                   edgesOnVertex,            &
+!       !$acc                   kiteIndexOnCell,          &
+!       !$acc                   latCell,                  &
+!       !$acc                   lonCell,                  &
+!       !$acc                   xCell,                    &
+!       !$acc                   yCell,                    &
+!       !$acc                   zCell,                    &
+!       !$acc                   latEdge,                  &
+!       !$acc                   lonEdge,                  &
+!       !$acc                   xEdge,                    &
+!       !$acc                   yEdge,                    &
+!       !$acc                   zEdge,                    &
+!       !$acc                   latVertex,                &
+!       !$acc                   lonVertex,                &
+!       !$acc                   xVertex,                  &
+!       !$acc                   yVertex,                  &
+!       !$acc                   zVertex,                  &
+!       !$acc                   fEdge,                    &
+!       !$acc                   fVertex,                  &
+!       !$acc                   fCell,                    &
+!       !$acc                   dcEdge,                   &
+!       !$acc                   dvEdge,                   &
+!       !$acc                   areaCell,                 &
+!       !$acc                   invAreaCell,              &
+!       !$acc                   areaTriangle,             &
+!       !$acc                   bottomDepth,              &
+!       !$acc                   refBottomDepth,           &
+!       !$acc                   refBottomDepthTopOfCell,  &
+!       !$acc                   vertCoordMovementWeights, &
+!       !$acc                   meshScalingDel2,          &
+!       !$acc                   meshScalingDel4,          &
+!       !$acc                   meshDensity,              &
+!       !$acc                   angleEdge,                &
+!       !$acc                   distanceToCoast,          &
+!       !$acc                   edgeMask,                 &
+!       !$acc                   cellMask,                 &
+!       !$acc                   vertexMask,               &
+!       !$acc                   boundaryEdge,             &
+!       !$acc                   boundaryCell,             &
+!       !$acc                   boundaryVertex,           &
+!       !$acc                   edgeSignOnCell,           &
+!       !$acc                   edgeSignOnVertex,         &
+!       !$acc                   weightsOnEdge,            &
+!       !$acc                   kiteAreasOnVertex,        &
+!       !$acc                   edgeTangentVectors,       &
+!       !$acc                   edgeNormalVectors,        &
+!       !$acc                   localVerticalUnitVectors, &
+!       !$acc                   cellTangentPlane,         &
+!       !$acc                   coeffs_reconstruct)
+!
+!!-------------------------------------------------------------------------------
+!
+!    end subroutine ocn_spatial_mode_splitting_mesh_redirect !}}}
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 ! vim: foldmethod=marker
