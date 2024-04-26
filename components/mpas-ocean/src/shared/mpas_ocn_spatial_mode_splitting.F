@@ -27,8 +27,6 @@ module ocn_spatial_mode_splitting
     use mpas_pool_routines
     use mpas_constants
 
-    use ocn_constants
-    use ocn_config
     use mpas_geometry_utils
     use mpas_log     
     use mpas_field_routines
@@ -40,6 +38,8 @@ module ocn_spatial_mode_splitting
 
     use ocn_diagnostics_variables
     use ocn_mesh
+    use ocn_constants
+    use ocn_config
 
 #ifdef HAVE_MOAB
     use iMOAB
@@ -695,7 +695,7 @@ contains
         ! free send buffers
         if (bcComm .ne. MPI_COMM_NULL) then
            ierr = iMOAB_FreeSenderBuffers(cmpbcPID, cplbtr)
-           call errorout(ierr,"failed to free send buffers")
+           call errorout(ierr,"failed to free send buffers 698")
         endif
 
         ! do remapping on coupler
@@ -725,7 +725,7 @@ contains
         ! free send buffers
         if (cplComm .ne. MPI_COMM_NULL) then
            ierr = iMOAB_FreeSenderBuffers(cplbtrPID, cmpbtr)
-           call errorout(ierr,"failed to free send buffers")
+           call errorout(ierr,"failed to free send buffers 728")
         endif
         block_ptr => block_ptr % next
     enddo
@@ -767,6 +767,10 @@ contains
             barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
             barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
         enddo
+
+        ! perform halo exchange
+        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
+        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
 
         ! put back into edge based arrays
         barotropicForcing_btr(:) = 0d0
@@ -933,7 +937,7 @@ contains
         ! free send buffers
         if (btrComm .ne. MPI_COMM_NULL) then
            ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
-           call errorout(ierr,"failed to free send buffers")
+           call errorout(ierr,"failed to free send buffers 936")
         endif
 
         ! do remapping
@@ -1000,6 +1004,10 @@ contains
             barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
             barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
         enddo
+
+        ! exchange halos
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
 
         ! put into edge-based arrays
         barotropicThicknessFlux_bc(:)=0d0
