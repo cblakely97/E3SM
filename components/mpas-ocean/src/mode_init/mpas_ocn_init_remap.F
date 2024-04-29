@@ -85,9 +85,6 @@ contains
 
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
-    type (mpas_pool_type), pointer :: statePool
-    type (mpas_pool_type), pointer :: tracersPool
-    type (mpas_pool_type), pointer :: verticalMeshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     
     ! local variables
@@ -95,18 +92,6 @@ contains
     real (kind=RKIND) :: yMin, yMax, xMin, xMax, dcEdgeMin, dcEdgeMinGlobal
     real (kind=RKIND) :: yMinGlobal, yMaxGlobal, yMidGlobal, xMinGlobal, xMaxGlobal
     real (kind=RKIND), dimension(:), pointer :: interfaceLocations
-    ! cpb
-    ! barotropic forcing temp arrays
-    ! bc domain
-    real (kind=RKIND), dimension(:), allocatable :: btForcingMeridional, btForcingZonal
-    real (kind=RKIND), dimension(:), allocatable :: btForcingX, btForcingY, btForcingZ
-    real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors
-    ! bt domain
-    real (kind=RKIND), dimension(:), allocatable :: btForcingMeridional_btr, btForcingZonal_btr
-    real (kind=RKIND), dimension(:), allocatable :: btForcingX_btr, btForcingY_btr, btForcingZ_btr
-    real (kind=RKIND) :: zonal_bt_edge, merid_bt_edge ! for cell => edge
-    integer :: cell1, cell2
-    ! end cpb
 
     ! Define dimension pointers
     integer, pointer :: nCellsSolve, nEdgesSolve, nVertLevels, nVertLevelsP1
@@ -120,25 +105,13 @@ contains
     integer, dimension(:,:), pointer :: cellsOnEdge
     real (kind=RKIND), dimension(:), pointer :: angleEdge
     
-    ! cpb
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcing
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcing_btr
+    real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
+                                                barotropicForcingMeridional_bc
+    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
+                                                barotropicThicknessFluxMeridional_btr
+    integer, pointer :: nCellsSolve_bc, nCellsAll_bc, nCellsSolve_btr, nCellsAll_btr
     real (kind=RKIND), dimension(:), pointer :: xEdge, yEdge
-    ! iMOAB variables
-    character*100 :: outfn, writeopts, appname
-    character(:), allocatable :: weights_identifier1
-    character(:), allocatable :: disc_methods1, disc_methods2, dof_tag_names1, dof_tag_names2
-    integer :: disc_orders1, disc_orders2
-    integer :: fNoBubble, fMonotoneTypeID, fVolumetric, fNoConserve, fValidate, fInverseDistanceMap
-    integer, dimension(2) :: tagIndices, tagTypes
-    character(:), allocatable :: bcFields, btrFields
-    integer, dimension(3) :: nverts, nelem, nblocks, nsbc, ndbc
-    real (kind=RKIND), dimension(:), allocatable :: varbc, varbtr ! for sending back and forth
-    ! end cpb
     iErr = 0
-    tagTypes(1) = 1 ! DENSE_DOUBLE
-    tagTypes(2) = 1 ! DENSE_DOUBLE
-
 
     if(config_init_configuration .ne. trim('remap')) return
 
@@ -197,15 +170,64 @@ contains
     call mpas_dmpar_max_real(domain % dminfo, xMax, xMaxGlobal)
     call mpas_dmpar_min_real(domain % dminfo, dcEdgeMin, dcEdgeMinGlobal)
 
+    ! zero out halos to test halo exchanges
     block_ptr => domain % blocklist
     do while(associated(block_ptr))
        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+       call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
        call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
        call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
 
+       ! get input barotropicForcing on baroclinic mesh and zero out halos
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nCellsOwned', nCellsAll_bc)
+       call mpas_pool_get_array(diagnosticsPool,&
+                                'barotropicForcingZonal',&
+                                barotropicForcingZonal_bc)
+       call mpas_pool_get_array(diagnosticsPool,&
+                                'barotropicForcingMeridional',&
+                                barotropicForcingMeridional_bc)
+
+!       do iCell = nCellsSolve_bc,nCellsAll_bc
+!          barotropicForcingZonal_bc(iCell) = 0d0
+!          barotropicForcingMeridional_bc(iCell) = 0d0
+!       enddo
+
        block_ptr => block_ptr % next
     end do
+
+    ! zero out halos to test halo exchanges
+    block_ptr => domain_btr % blocklist
+    do while(associated(block_ptr))
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+       call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+
+       call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
+       call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
+
+       ! get input barotropicForcing on baroclinic mesh and zero out halos
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nCellsAll', nCellsAll_btr)
+       call mpas_pool_get_array(diagnosticsPool,&
+                                'barotropicThicknessFluxZonal',&
+                                barotropicThicknessFluxZonal_btr)
+       call mpas_pool_get_array(diagnosticsPool,&
+                                'barotropicThicknessFluxMeridional',&
+                                barotropicThicknessFluxMeridional_btr)
+
+!       do iCell = nCellsSolve_btr,nCellsAll_btr
+!          barotropicThicknessFluxZonal_btr(iCell) = 0d0
+!          barotropicThicknessFluxMeridional_btr(iCell) = 0d0
+!       enddo
+
+       block_ptr => block_ptr % next
+    end do
+
+
+    !--------------------------------------------------------------------
+    ! initialize moab for spatial mode splitting
+    !--------------------------------------------------------------------
 
     call ocn_spatial_mode_splitting_init_moab_domain(domain)
     call ocn_spatial_mode_splitting_init_moab_domain(domain % next)

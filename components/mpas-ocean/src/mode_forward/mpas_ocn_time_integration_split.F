@@ -1632,9 +1632,6 @@ module ocn_time_integration_split
             ! domain for spatial mode splitting. 
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-            ! pretty sure we need to transmit barotropicThicknessFlux + normalBarotropicVelocity?
-            ! I also think we need to somehow update ssh on the barotropic mesh?
-
             if (config_spatial_mode_splitting) then
 
               ! send barotropicForcing to barotropic domain
@@ -1763,6 +1760,10 @@ module ocn_time_integration_split
                   thicknessSum = thicknessSum + &
                                  layerThickEdgeFlux(k,iEdge)
                enddo
+
+               ! if (config_spatial_mode_splitting) then
+               !    use uavg = F-sum... instead of velocity correction
+               ! endif
 
                normalVelocityCorrection = useVelocityCorrection* &
                              ((barotropicThicknessFlux(iEdge) - &
