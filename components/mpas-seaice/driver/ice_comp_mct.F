@@ -657,7 +657,8 @@ contains
        call mpas_log_write('Core init failed for core ' // trim(domain % core % coreName), MPAS_LOG_CRIT)
     end if
 #ifdef HAVE_MOAB
-    call init_moab_mpas(domain, ICEID, MPSIID) ! should return MPSIID ..
+    call init_moab_mpas(domain, ICEID, MPSIID,&
+                        domain % dminfi % comm ) ! should return MPSIID ..
     call mpas_log_write('initialized MOAB MPAS sea-ice instance... ')
 #endif
 !-----------------------------------------------------------------------
