@@ -65,9 +65,9 @@ module ocn_spatial_mode_splitting
     !--------------------------------------------------------------------
 
     public :: ocn_spatial_mode_splitting_init_moab_domain,&
+              ocn_spatial_mode_splitting_setup_domain,&
               ocn_spatial_mode_splitting_bc2btr_remapping,&
-              ocn_spatial_mode_splitting_btr2bc_remapping,&
-              ocn_spatial_mode_splitting_mesh_redirect
+              ocn_spatial_mode_splitting_btr2bc_remapping
 
     !--------------------------------------------------------------------
     !
@@ -1049,19 +1049,19 @@ contains
 !> \details
 !> This subroutine redirects the pointers to various arrays, values, etc.
 !> between the barotropic and baroclinic domains for spatial mode 
-!> splitting.
+!> splitting before and after the barotropic subcycling occurs.
 !
 !-----------------------------------------------------------------------
 
-    subroutine ocn_spatial_mode_splitting_mesh_redirect(domain,&
-                                                        statePool,&
-                                                        forcingPool,&
-                                                        tendPool,&
-                                                        sshCur,&
-                                                        sshNew,&
-                                                        normalBarotropicVelocityCur,&
-                                                        normalBarotropicVelocityNew,&
-                                                        sshTend) !{{{
+    subroutine ocn_spatial_mode_splitting_setup_domain(domain,&
+                                                       statePool,&
+                                                       forcingPool,&
+                                                       tendPool,&
+                                                       sshCur,&
+                                                       sshNew,&
+                                                       normalBarotropicVelocityCur,&
+                                                       normalBarotropicVelocityNew,&
+                                                       sshTend) !{{{
 
     !-----------------------------------------------------------------
     ! IMPORTANT NOTE:
@@ -1071,25 +1071,6 @@ contains
     ! for use in the barotropic subcycle when spatial mode splitting 
     ! is used:
     !
-    !    mesh pool:
-    !       nEdgesAll
-    !       nCellsAll
-    !       maxEdges
-    !       nCellsOwned
-    !       nEdgesOwned
-    !       nCellsHalo
-    !       nEdgesHalo
-    !       edgesSignOnCell
-    !       nEdgesOnEdge
-    !       maxLevelEdgeTop
-    !       edgesOnEdge
-    !       cellsOnEdge
-    !       fEdge
-    !       dvEdge
-    !       dcEdge
-    !       areaCell
-    !       weightsOnEdge
-    !
     !    diagnostics pool:
     !       barotropicForcing
     !       barotropicThicknessFlux
@@ -1097,6 +1078,7 @@ contains
     ! This subroutine is called immediately before and after the 
     ! barotropic subcycling and thus resets to the baroclinic
     ! domain after each barotropic subcycle is complete.
+    !-----------------------------------------------------------------
 
     !-----------------------------------------------------------------
     ! input variables
@@ -1106,18 +1088,18 @@ contains
     ! input/output variables
     !-----------------------------------------------------------------
     type(domain_type), intent(inout) :: domain
-    type(mpas_pool_type), intent(inout) :: statePool,&
+    type(mpas_pool_type), pointer, intent(inout) :: statePool,&
                                            forcingPool,&
                                            tendPool
     
     ! statePool
-    real (kind=RKIND), intent(inout), dimension(:) :: sshCur,&
+    real (kind=RKIND), pointer, intent(inout), dimension(:) :: sshCur,&
                                                       sshNew,&
                                                       normalBarotropicVelocityCur,&
                                                       normalBarotropicVelocityNew
                                                        
     ! tendPool
-    real (kind=RKIND), intent(inout), dimension(:) :: sshTend
+    real (kind=RKIND), pointer, intent(inout), dimension(:) :: sshTend
 
     !-----------------------------------------------------------------
     ! output variables
@@ -1129,138 +1111,73 @@ contains
 
     type(block_type), pointer :: block  ! variables in current subblock
 
-    type(mpas_pool_type), pointer :: meshPool                 ! mesh variables in MPAS pool structure
+    type(mpas_pool_type), pointer :: diagnosticsPool
 
-    ! scalar pointers for retrieval, but convert to actual scalars in struct
-    integer, pointer :: nCellsTmp, &
-                        nEdgesTmp, &
-                        maxEdgesTmp
-
-    ! temporary pointers for converting index arrays
-    integer, dimension(:), pointer :: nCellsArrayTmp, &
-                                      nEdgesArrayTmp
-
-    ! temporary pointers for converting masks
-    integer i, k, n          ! loop indices
-    integer, dimension(:, :), pointer :: edgeSignOnCellTmp
+    ! loop indices
+    integer :: i, k, n
+    integer :: ierr
 
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
+    ! perform remapping: **NOTE** if the argument to this subroutine has 
+    ! domainID = 1, that means we are switching from the baroclinic to
+    ! the barotropic domain and thus have to remap barotropicForcing. 
+    ! This is opposite what one might think initially.
+    if ( domain % domainID .eq. 0 ) then
+
+       ! baroclinic domain was passed. end of barotropic subcycle. 
+       ! send barotropicThicknessFlux from barotropic to baroclinic
+       !call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
+
+    elseif ( domain % domainID .eq. 1 ) then
+
+       ! barotropic domain was passed. beginning of barotropic subcycle.
+       ! send barotropicForcing from baroclinic to barotropic.
+       !call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+
+    endif
+
+    ! destroy current mesh data
+    call ocn_meshDestroy(ierr)
+
+    ! create new mesh
+    call ocn_meshCreate(domain)
+
+    ! redirect pools
     block => domain%blocklist
 
-    ! retrieve the mpas mesh pool
-    call mpas_pool_get_subpool(block%structs, 'mesh', meshPool)
+    call mpas_pool_get_subpool(block%structs, 'state', statePool)
 
-    !-----------------------------------------------------------------
-    ! first set pointers/values for all mesh variables
-    !-----------------------------------------------------------------
+    call mpas_pool_get_subpool(block%structs, 'forcing', forcingPool)
 
-    ! set all mesh dimensions
-    call mpas_pool_get_dimension(meshPool, 'nCells', &
-                                 nCellsTmp)
-    call mpas_pool_get_dimension(meshPool, 'nEdges', &
-                                 nEdgesTmp)
-    call mpas_pool_get_dimension(meshPool, 'maxEdges', &
-                                 maxEdgesTmp)
-    call mpas_pool_get_dimension(meshPool, 'nCellsArray', &
-                                 nCellsArrayTmp)
-    call mpas_pool_get_dimension(meshPool, 'nEdgesArray', &
-                                 nEdgesArrayTmp)
+    call mpas_pool_get_subpool(block%structs, 'tend', tendPool)
 
-    ! convert previous index limits into new halo definitions
-    nCellsAll = nCellsTmp
-    nEdgesAll = nEdgesTmp
-    maxEdges  = maxEdgesTmp
+    ! redirect arrays from statePool
+    call mpas_pool_get_array(statePool, 'ssh', sshCur, 1)
 
-    n = size(nCellsArrayTmp)
+    call mpas_pool_get_array(statePool, 'ssh', sshNew, 2)
 
-    ! deallocate allocatable public variables
-    deallocate (nCellsHalo, nEdgesHalo, edgeSignOnCell)
+    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+                             normalBarotropicVelocityCur, 1)
 
-    ! recreate allocatable public variables with new dimensions
-    allocate (nCellsHalo(n - 1))
-    nCellsOwned = nCellsArrayTmp(1)
-    do i = 2, n
-       nCellsHalo(i - 1) = nCellsArrayTmp(i)
-    end do
+    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+                             normalBarotropicVelocityNew, 2)
 
-    n = size(nEdgesArrayTmp)
-    allocate (nEdgesHalo(n - 1))
-    nEdgesOwned = nEdgesArrayTmp(1)
-    do i = 2, n
-       nEdgesHalo(i - 1) = nEdgesArrayTmp(i)
-    end do
+    call mpas_pool_get_array(tendPool, 'ssh', sshTend)
 
-    ! set pointers for a lot of connectivity info
-    call mpas_pool_get_array(meshPool, 'nEdgesOnEdge', &
-                             nEdgesOnEdge)
-    call mpas_pool_get_array(meshPool, 'nEdgesOnCell', &
-                             nEdgesOnCell)
-    call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', &
-                             maxLevelEdgeTop)
-    call mpas_pool_get_array(meshPool, 'edgesOnEdge', &
-                             edgesOnEdge)
-    call mpas_pool_get_array(meshPool, 'cellsOnEdge', &
-                             cellsOnEdge)
+    ! redirect barotropicForcing and barotropicThicknessFlux
+    call mpas_pool_get_subpool(block%structs, 'diagnostics', diagnosticsPool)
 
-    ! now set a number of physics and numerical properties of mesh
-    call mpas_pool_get_array(meshPool, 'fEdge', &
-                             fEdge)
-    call mpas_pool_get_array(meshPool, 'dcEdge', &
-                             dcEdge)
-    call mpas_pool_get_array(meshPool, 'dvEdge', &
-                             dvEdge)
-    call mpas_pool_get_array(meshPool, 'areaCell', &
-                             areaCell)
-    call mpas_pool_get_array(meshPool, 'weightsOnEdge', &
-                             weightsOnEdge)
+    call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing)
 
-    ! For masks, we wish to convert to real multiplicative masks
-    ! so retrieve integer version pointers and allocate real masks
-    ! Once these are converted in Registry, we can eliminate this.
-    call mpas_pool_get_array(meshPool, 'edgeSignOnCell', &
-                             edgeSignOnCellTmp)
+    call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux', barotropicThicknessFlux)
 
-    allocate (edgeSignOnCell(maxEdges, nCellsAll+1))
-
-    !-----------------------------------------------------------------
-    ! Now that all pointers are set and mesh variables allocated
-    ! we initialize other mesh quantities
-    !-----------------------------------------------------------------
-
-    do n = 1, nCellsAll+1
-    do k = 1, maxEdges
-       edgeSignOnCellTmp(k, n) = nint(edgeSignOnCell(k,n))
-    end do
-    end do
-
-    !-----------------------------------------------------------------
-    ! Copy mesh data to accelerator if needed.
-    !-----------------------------------------------------------------
-
-       !$acc enter data copyin( &
-       !$acc                   nCellsAll,                &
-       !$acc                   nEdgesAll,                &
-       !$acc                   nCellsOwned,              &
-       !$acc                   nEdgesOwned,              &
-       !$acc                   maxEdges,                 &
-       !$acc                   nEdgesHalo,               &
-       !$acc                   nCellsHalo,               &
-       !$acc                   nEdgesOnEdge,             &
-       !$acc                   maxLevelEdgeTop,          &
-       !$acc                   edgesOnEdge,              &
-       !$acc                   fEdge,                    &
-       !$acc                   dcEdge,                   &
-       !$acc                   dvEdge,                   &
-       !$acc                   areaCell,                 &
-       !$acc                   edgeSignOnCell,           &
-       !$acc                   weightsOnEdge)
 
 !-------------------------------------------------------------------------------
 
-    end subroutine ocn_spatial_mode_splitting_mesh_redirect !}}}
+    end subroutine ocn_spatial_mode_splitting_setup_domain !}}}
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 ! vim: foldmethod=marker

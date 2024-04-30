@@ -335,6 +335,7 @@ module ocn_time_integration_split
 
         ! "next" domain is barotropic domain
         domain_btr => domain % next
+
       endif
 
       call mpas_pool_get_subpool(block%structs, 'state', &
@@ -859,20 +860,29 @@ module ocn_time_integration_split
 
          if (config_spatial_mode_splitting) then
 
-           ! send barotropicForcing to barotropic domain
+           ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
            ! point nCells, nEdges, etc. to appropriate values on barotropic
            ! domain for subcycling
-           call ocn_spatial_mode_splitting_mesh_redirect(domain_btr,&
-                                                         statePool,&
-                                                         forcingPool,&
-                                                         tendPool,&
-                                                         sshCur,&
-                                                         sshNew,&
-                                                         normalBarotropicVelocityCur,&
-                                                         normalBarotropicVelocityNew,&
-                                                         sshTend)
+           call ocn_spatial_mode_splitting_setup_domain(domain_btr,&
+                                                        statePool,&
+                                                        forcingPool,&
+                                                        tendPool,&
+                                                        sshCur,&
+                                                        sshNew,&
+                                                        normalBarotropicVelocityCur,&
+                                                        normalBarotropicVelocityNew,&
+                                                        sshTend)
+
+           call mpas_dmpar_exch_group_create(domain_btr, subcycleGroupName)
+           call mpas_dmpar_exch_group_add_field(domain_btr, subcycleGroupName, &
+                                                'sshSubcycle')
+           call mpas_dmpar_exch_group_add_field(domain_btr, subcycleGroupName, &
+                                       'normalBarotropicVelocitySubcycle')
+           call mpas_dmpar_exch_group_build_reusable_buffers(domain_btr, &
+                                                          subcycleGroupName)
+                                                     
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1005,8 +1015,14 @@ module ocn_time_integration_split
                if (cellHaloComputeCounter < neededHalos) then
 
                   call mpas_timer_start('se halo subcycle')
-                  call mpas_dmpar_exch_group_reuse_halo_exch(domain, &
-                       subcycleGroupName, timeLevel=oldBtrSubcycleTime)
+
+                  if (config_spatial_mode_splitting) then
+                     call mpas_dmpar_exch_group_reuse_halo_exch(domain_btr, &
+                          subcycleGroupName, timeLevel=oldBtrSubcycleTime)
+                  else
+                     call mpas_dmpar_exch_group_reuse_halo_exch(domain, &
+                          subcycleGroupName, timeLevel=oldBtrSubcycleTime)
+                  endif
                   call mpas_timer_stop('se halo subcycle')
 
                   ! Reset halo counters after halo update
@@ -1634,20 +1650,28 @@ module ocn_time_integration_split
 
             if (config_spatial_mode_splitting) then
 
-              ! send barotropicForcing to barotropic domain
+              ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
               ! point nCells, nEdges, etc. to appropriate values on barotropic
               ! domain for subcycling
-              call ocn_spatial_mode_splitting_mesh_redirect(domain,&
-                                                            statePool,&
-                                                            forcingPool,&
-                                                            tendPool,&
-                                                            sshCur,&
-                                                            sshNew,&
-                                                            normalBarotropicVelocityCur,&
-                                                            normalBarotropicVelocityNew,&
-                                                            sshTend)
+              call ocn_spatial_mode_splitting_setup_domain(domain,&
+                                                           statePool,&
+                                                           forcingPool,&
+                                                           tendPool,&
+                                                           sshCur,&
+                                                           sshNew,&
+                                                           normalBarotropicVelocityCur,&
+                                                           normalBarotropicVelocityNew,&
+                                                           sshTend)
+
+               call mpas_dmpar_exch_group_create(domain, subcycleGroupName)
+               call mpas_dmpar_exch_group_add_field(domain, subcycleGroupName, &
+                                                    'sshSubcycle')
+               call mpas_dmpar_exch_group_add_field(domain, subcycleGroupName, &
+                                                    'normalBarotropicVelocitySubcycle')
+               call mpas_dmpar_exch_group_build_reusable_buffers(domain, &
+                                                                 subcycleGroupName)
 
             endif
 
@@ -1749,25 +1773,44 @@ module ocn_time_integration_split
                ! on land boundaries maxLevelEdgeTop=0, but I want to
                ! initialize thicknessSum with a nonzero value to avoid
                ! a NaN.
-               normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
-                                        uTemp(minLevelEdgeBot(iEdge),iEdge)
-               thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
+               if (config_spatial_mode_splitting) then
 
-               do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
-                  normalThicknessFluxSum = normalThicknessFluxSum + &
-                                           layerThickEdgeFlux(k,iEdge)*&
-                                           uTemp(k,iEdge)
-                  thicknessSum = thicknessSum + &
-                                 layerThickEdgeFlux(k,iEdge)
-               enddo
+                  ! group correction and baroclinic velocities together
+                  normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
+                                           normalBaroclinicVelocityNew(minLevelEdgeBot(iEdge),iEdge)
+                  thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
 
-               ! if (config_spatial_mode_splitting) then
-               !    use uavg = F-sum... instead of velocity correction
-               ! endif
+                  do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+                     normalThicknessFluxSum = normalThicknessFluxSum + &
+                                              layerThickEdgeFlux(k,iEdge)*&
+                                              normalBaroclinicVelocityNew(k,iEdge)
+                     thicknessSum = thicknessSum + &
+                                    layerThickEdgeFlux(k,iEdge)
+                  enddo
 
-               normalVelocityCorrection = useVelocityCorrection* &
-                             ((barotropicThicknessFlux(iEdge) - &
-                               normalThicknessFluxSum)/thicknessSum)
+                  normalVelocityCorrection = useVelocityCorrection* &
+                                ((barotropicThicknessFlux(iEdge) - &
+                                  normalThicknessFluxSum)/thicknessSum)
+               else
+                  normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
+                                           uTemp(minLevelEdgeBot(iEdge),iEdge)
+                  thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
+
+                  do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+                     normalThicknessFluxSum = normalThicknessFluxSum + &
+                                              layerThickEdgeFlux(k,iEdge)*&
+                                              uTemp(k,iEdge)
+                     thicknessSum = thicknessSum + &
+                                    layerThickEdgeFlux(k,iEdge)
+                  enddo
+
+                  ! if (config_spatial_mode_splitting) then
+                  !    use uavg = F-sum... instead of velocity correction
+                  ! endif
+                  normalVelocityCorrection = useVelocityCorrection* &
+                                ((barotropicThicknessFlux(iEdge) - &
+                                  normalThicknessFluxSum)/thicknessSum)
+               endif
 
                do k = 1, nVertLevels
 

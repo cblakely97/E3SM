@@ -281,6 +281,11 @@ module ocn_forward_mode
          return
       endif
 
+      ! initialize iMOAB for spatial mode splitting
+      if (config_spatial_mode_splitting) then
+         call ocn_spatial_mode_splitting_init_moab_domain(domain)
+      endif
+
       if (domain % domainID == 1) then
          return
       end if
@@ -510,8 +515,6 @@ module ocn_forward_mode
       call ocn_manufactured_solution_init(domain, err_tmp)
       ierr = ior(ierr,err_tmp)
 
-      ! initialize iMOAB for spatial mode splitting
-      call ocn_spatial_mode_splitting_init_moab_domain(domain)
 
       if (ierr /= 0) then
          call mpas_log_write( &
@@ -605,6 +608,7 @@ module ocn_forward_mode
    function ocn_forward_mode_run(domain) result(ierr)!{{{
 
       type (domain_type), intent(inout) :: domain
+      type (domain_type), pointer :: domain_ptr
 
       integer :: itimestep, err
       real (kind=RKIND) :: dt
@@ -625,119 +629,136 @@ module ocn_forward_mode
       ierr = 0
 
       ! Eventually, dt should be domain specific
-      timeStep = mpas_get_clock_timestep(domain % clock, ierr=ierr)
-      call mpas_get_timeInterval(timeStep, dt=dt)
 
-      currTime = mpas_get_clock_time(domain % clock, MPAS_NOW, ierr)
-      call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+      ! adding for spatial mode splitting
+      domain_ptr => domain % core % domainlist
+      do while(associated(domain_ptr))  ! spatial mode splitting
+         timeStep = mpas_get_clock_timestep(domain_ptr % clock, ierr=ierr)
+         call mpas_get_timeInterval(timeStep, dt=dt)
+
+         currTime = mpas_get_clock_time(domain_ptr % clock, MPAS_NOW, ierr)
+         call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
 #ifdef MPAS_DEBUG
-      call mpas_log_write('Initial time ' // trim(timeStamp))
+         call mpas_log_write('Initial time ' // trim(timeStamp))
 #endif
-      call ocn_analysis_compute_startup(domain, err)
+         call ocn_analysis_compute_startup(domain, err)
 
-      if (config_write_output_on_startup) then
-          call mpas_timer_start('io_write')
-          call mpas_stream_mgr_write(domain % streamManager, 'output', forceWriteNow=.true., ierr=ierr)
-          call mpas_timer_stop('io_write')
-      endif
+         if (config_write_output_on_startup) then
+             call mpas_timer_start('io_write')
+             call mpas_stream_mgr_write(domain_ptr % streamManager, 'output', forceWriteNow=.true., ierr=ierr)
+             call mpas_timer_stop('io_write')
+         endif
 
-      ! read initial data required for variable shortwave
-      call mpas_timer_start('io_shortwave',.false.)
-      call ocn_get_shortWaveData(domain % streamManager, domain, domain % clock, .true.)
-      call mpas_timer_stop('io_shortwave')
+         ! read initial data required for variable shortwave
+         call mpas_timer_start('io_shortwave',.false.)
+         call ocn_get_shortWaveData(domain_ptr % streamManager, domain_ptr, domain_ptr % clock, .true.)
+         call mpas_timer_stop('io_shortwave')
 
-      ! read initial data required for ecosys forcing
-      if (config_use_ecosysTracers) then
-        call mpas_timer_start('io_ecosys',.false.)
-        call ocn_get_ecosysData(domain % streamManager, domain, domain % clock, .true.)
-        call mpas_timer_stop('io_ecosys')
-      endif
+         ! read initial data required for ecosys forcing
+         if (config_use_ecosysTracers) then
+           call mpas_timer_start('io_ecosys',.false.)
+           call ocn_get_ecosysData(domain_ptr % streamManager, domain_ptr, domain_ptr % clock, .true.)
+           call mpas_timer_stop('io_ecosys')
+         endif
 
-      ! read initial data required for CFC forcing
-      if (config_use_CFCTracers) then
-        call mpas_timer_start('io_CFC',.false.)
-        call ocn_get_CFCData(domain % streamManager, domain, domain % clock, .true.)
-        call mpas_timer_stop('io_CFC')
-      endif
+         ! read initial data required for CFC forcing
+         if (config_use_CFCTracers) then
+           call mpas_timer_start('io_CFC',.false.)
+           call ocn_get_CFCData(domain_ptr % streamManager, domain_ptr, domain_ptr % clock, .true.)
+           call mpas_timer_stop('io_CFC')
+         endif
 
-      ! read initial data required for monthly surface salinity restoring
-      ! always execute this call as initial data needed regardless of alarm
-      if (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) then
-        call mpas_timer_start('io_monthly_surface_salinity',.false.)
-        call ocn_get_surfaceSalinityData(domain % streamManager, domain, domain % clock, .true.)
-        call mpas_timer_stop('io_monthly_surface_salinity')
-      endif
+         ! read initial data required for monthly surface salinity restoring
+         ! always execute this call as initial data needed regardless of alarm
+         if (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) then
+           call mpas_timer_start('io_monthly_surface_salinity',.false.)
+           call ocn_get_surfaceSalinityData(domain_ptr % streamManager, domain_ptr, domain_ptr % clock, .true.)
+           call mpas_timer_stop('io_monthly_surface_salinity')
+         endif
 
-      ! initialize time-varying forcing
-      call ocn_time_varying_forcing_init(domain)
-      call ocn_time_varying_forcing_get(domain % streamManager, domain, domain % clock)
+         ! initialize time-varying forcing
+         call ocn_time_varying_forcing_init(domain_ptr)
+         call ocn_time_varying_forcing_get(domain_ptr % streamManager, domain_ptr, domain_ptr % clock)
+
+         domain_ptr => domain_ptr % next
+      enddo ! spatial mode splitting
+
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) " after first domain_ptr thing"
+      write(6,*) ""
+      write(6,*) ""
 
       ! During integration, time level 1 stores the model state at the beginning of the
       !   time step, and time level 2 stores the state advanced dt in time by timestep(...)
       itimestep = 0
 
       do while (.not. mpas_is_clock_stop_time(domain % clock))
-         call mpas_timer_start('io_read')
-         call mpas_stream_mgr_read(domain % streamManager, ierr=ierr)
-         call mpas_timer_stop('io_read')
-         call mpas_timer_start('reset_io_alarms')
-         call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_INPUT, ierr=ierr)
 
-         ! Also restart all block_* streams, if any are defined.
-         if ( mpas_stream_mgr_stream_exists(domain % streamManager, 'block_.*') ) then
-            call mpas_stream_mgr_reset_alarms(domain % streamManager, streamID='block_.*', ierr=ierr)
-         end if
-         call mpas_timer_stop('reset_io_alarms')
+         domain_ptr => domain % core % domainlist
+         do while (associated(domain_ptr))
+            call mpas_timer_start('io_read')
+            call mpas_stream_mgr_read(domain_ptr % streamManager, ierr=ierr)
+            call mpas_timer_stop('io_read')
+            call mpas_timer_start('reset_io_alarms')
+            call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, direction=MPAS_STREAM_INPUT, ierr=ierr)
+            ! Also restart all block_* streams, if any are defined.
+            if ( mpas_stream_mgr_stream_exists(domain_ptr % streamManager, 'block_.*') ) then
+               call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, streamID='block_.*', ierr=ierr)
+            end if
+            call mpas_timer_stop('reset_io_alarms')
 
-         itimestep = itimestep + 1
-         call mpas_advance_clock(domain % clock)
+            itimestep = itimestep + 1
+            call mpas_advance_clock(domain_ptr % clock)
 
-         currTime = mpas_get_clock_time(domain % clock, MPAS_NOW, ierr)
-         call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
-         call mpas_log_write('Doing timestep ' // trim(timeStamp))
+            currTime = mpas_get_clock_time(domain_ptr % clock, MPAS_NOW, ierr)
+            call mpas_get_time(curr_time=currTime, dateTimeString=timeStamp, ierr=ierr)
+            call mpas_log_write('Doing timestep ' // trim(timeStamp))
 
-         ! pre-timestep analysis computation
-         call ocn_analysis_precompute(domain, ierr)
+            ! pre-timestep analysis computation
+            call ocn_analysis_precompute(domain_ptr, ierr)
 
 #ifdef MPAS_DEBUG
-         call mpas_log_write( '   Computing surface flux arrays')
+            call mpas_log_write( '   Computing surface flux arrays')
 #endif
-         block_ptr => domain % blocklist
-         do while(associated(block_ptr))
-           call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-           call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
-           call mpas_pool_get_subpool(block_ptr % structs, 'forcing', forcingPool)
-           call mpas_pool_get_subpool(block_ptr % structs, 'scratch', scratchPool)
-           call ocn_forcing_build_fraction_absorbed_array(meshPool, statePool, forcingPool, ierr, 1)
-           call mpas_timer_start("land_ice_build_arrays")
-           call ocn_surface_land_ice_fluxes_build_arrays(meshPool, &
-                                                         forcingPool, scratchPool, statePool, err)
-           call mpas_timer_stop("land_ice_build_arrays")
-           call ocn_surface_land_ice_fluxes_accumulate_fluxes(meshPool, forcingPool, &
-                                                              statePool, dt, err)
+            block_ptr => domain % blocklist
+            do while(associated(block_ptr))
+               call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+               call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+               call mpas_pool_get_subpool(block_ptr % structs, 'forcing', forcingPool)
+               call mpas_pool_get_subpool(block_ptr % structs, 'scratch', scratchPool)
+               call ocn_forcing_build_fraction_absorbed_array(meshPool, statePool, forcingPool, ierr, 1)
+               call mpas_timer_start("land_ice_build_arrays")
+               call ocn_surface_land_ice_fluxes_build_arrays(meshPool, &
+                                                            forcingPool, scratchPool, statePool, err)
+               call mpas_timer_stop("land_ice_build_arrays")
+               call ocn_surface_land_ice_fluxes_accumulate_fluxes(meshPool, forcingPool, &
+                                                                  statePool, dt, err)
 
-           call ocn_frazil_forcing_build_arrays(domain, meshPool, forcingPool, statePool, err)
-           call ocn_tidal_forcing_build_array(domain, meshPool, forcingPool, statePool, err)
+               call ocn_frazil_forcing_build_arrays(domain_ptr, meshPool, forcingPool, statePool, err)
+               call ocn_tidal_forcing_build_array(domain_ptr, meshPool, forcingPool, statePool, err)
 
-           ! Compute normalGMBolusVelocity, relativeSlope and RediDiffVertCoef if respective flags are turned on
+               ! Compute normalGMBolusVelocity, relativeSlope and RediDiffVertCoef if respective flags are turned on
 
-           call ocn_eddy_compute_mixed_layer_depth(statePool, forcingPool)
-           if (config_use_GM .or. config_submesoscale_enable) then
-               call ocn_eddy_compute_buoyancy_gradient()
-           end if
+               call ocn_eddy_compute_mixed_layer_depth(statePool, forcingPool)
+               if (config_use_GM .or. config_submesoscale_enable) then
+                   call ocn_eddy_compute_buoyancy_gradient()
+               end if
 
-           if (config_submesoscale_enable) then
-               call mpas_timer_start("submesoscale eddy velocity compute", .false.)
-               call ocn_submesoscale_compute_velocity()
-               call mpas_timer_stop("submesoscale eddy velocity compute")
-           end if
+               if (config_submesoscale_enable) then
+                   call mpas_timer_start("submesoscale eddy velocity compute", .false.)
+                   call ocn_submesoscale_compute_velocity()
+                   call mpas_timer_stop("submesoscale eddy velocity compute")
+               end if
 
-           if (config_use_Redi.or.config_use_GM) then
-               call ocn_gm_compute_Bolus_velocity(statePool, meshPool, scratchPool, timeLevelIn=1)
-           end if
+               if (config_use_Redi.or.config_use_GM) then
+                   call ocn_gm_compute_Bolus_velocity(statePool, meshPool, scratchPool, timeLevelIn=1)
+               end if
 
-           block_ptr => block_ptr % next
-         end do
+               block_ptr => block_ptr % next
+            enddo
+            domain_ptr => domain_ptr % next
+         enddo
 
          call mpas_timer_start("time integration")
 
@@ -749,101 +770,105 @@ module ocn_forward_mode
          call mpas_timer_stop("time integration")
 
          ! Move time level 2 fields back into time level 1 for next time step
+         domain_ptr => domain % core % domainlist
+         do while (associated(domain_ptr))
 #ifdef MPAS_DEBUG
-         call mpas_log_write( '   Shifting time levels')
+            call mpas_log_write( '   Shifting time levels')
 #endif
-         call mpas_pool_get_subpool(domain % blocklist % structs, 'state', statePool)
-         call mpas_pool_shift_time_levels(statePool)
+            call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', statePool)
+            call mpas_pool_shift_time_levels(statePool)
 
 #ifdef MPAS_DEBUG
-         call mpas_log_write( '   Handling analysis members')
+            call mpas_log_write( '   Handling analysis members')
 #endif
-         call ocn_analysis_compute(domain, err)
-         call ocn_analysis_restart(domain, err)
-         call ocn_analysis_write(domain, err)
+            call ocn_analysis_compute(domain_ptr, err)
+            call ocn_analysis_restart(domain_ptr, err)
+            call ocn_analysis_write(domain_ptr, err)
 
 #ifdef MPAS_DEBUG
-         call mpas_log_write( '   Performing I/O')
+            call mpas_log_write( '   Performing I/O')
 #endif
-         call mpas_timer_start('io_write')
-         call mpas_stream_mgr_write(domain % streamManager, streamID='output', ierr=ierr)
-         call mpas_timer_stop('io_write')
-         call mpas_timer_start('reset_io_alarms')
-         call mpas_stream_mgr_reset_alarms(domain % streamManager, streamID='output', ierr=ierr)
-         call mpas_timer_stop('reset_io_alarms')
+            call mpas_timer_start('io_write')
+            call mpas_stream_mgr_write(domain_ptr % streamManager, streamID='output', ierr=ierr)
+            call mpas_timer_stop('io_write')
+            call mpas_timer_start('reset_io_alarms')
+            call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, streamID='output', ierr=ierr)
+            call mpas_timer_stop('reset_io_alarms')
 
-         if ( mpas_stream_mgr_ringing_alarms(domain % streamManager, streamID='restart', direction=MPAS_STREAM_OUTPUT, &
-                                             ierr=ierr) ) then
+            if ( mpas_stream_mgr_ringing_alarms(domain_ptr % streamManager, streamID='restart', direction=MPAS_STREAM_OUTPUT, &
+                                                ierr=ierr) ) then
 #ifdef MPAS_DEBUG
-            call mpas_log_write( '   Writing restart timestamp file')
+               call mpas_log_write( '   Writing restart timestamp file')
 #endif
-            if ( domain % dminfo % my_proc_id == 0 ) then
-               open(22, file=config_restart_timestamp_name, form='formatted', status='replace')
-               write(22, *) trim(timeStamp)
-               close(22)
+               if ( domain_ptr % dminfo % my_proc_id == 0 ) then
+                  open(22, file=config_restart_timestamp_name, form='formatted', status='replace')
+                  write(22, *) trim(timeStamp)
+                  close(22)
+               end if
+
+               ! write forcing restart if any type(s) time varying forcing is used
+               if (trim(config_sw_absorption_type)=='ohlmann00' .or. &
+                   config_use_ecosysTracers .or. &
+                   (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) .or. &
+                   config_use_time_varying_atmospheric_forcing .or. &
+                   config_use_time_varying_land_ice_forcing) then
+
+                   call ocn_time_varying_forcing_write_restart_times(domain_ptr)
+               end if
             end if
 
-            ! write forcing restart if any type(s) time varying forcing is used
-            if (trim(config_sw_absorption_type)=='ohlmann00' .or. &
-                config_use_ecosysTracers .or. &
-                (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) .or. &
-                config_use_time_varying_atmospheric_forcing .or. &
-                config_use_time_varying_land_ice_forcing) then
-
-                call ocn_time_varying_forcing_write_restart_times(domain)
-            end if
-         end if
-
-         call mpas_timer_start('io_write')
-         call mpas_stream_mgr_write(domain % streamManager, streamID='restart', ierr=ierr)
-         call mpas_timer_stop('io_write')
+            call mpas_timer_start('io_write')
+            call mpas_stream_mgr_write(domain_ptr % streamManager, streamID='restart', ierr=ierr)
+            call mpas_timer_stop('io_write')
 
 
-         call mpas_timer_start('reset_io_alarms')
-         call mpas_stream_mgr_reset_alarms(domain % streamManager, streamID='restart', ierr=ierr)
-         call mpas_timer_stop('reset_io_alarms')
+            call mpas_timer_start('reset_io_alarms')
+            call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, streamID='restart', ierr=ierr)
+            call mpas_timer_stop('reset_io_alarms')
 
-         call mpas_timer_start('io_write')
-         call mpas_stream_mgr_write(domain % streamManager, ierr=ierr)
-         call mpas_timer_stop('io_write')
-         call mpas_timer_start('reset_io_alarms')
-         call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
-         call mpas_timer_stop('reset_io_alarms')
+            call mpas_timer_start('io_write')
+            call mpas_stream_mgr_write(domain_ptr % streamManager, ierr=ierr)
+            call mpas_timer_stop('io_write')
+            call mpas_timer_start('reset_io_alarms')
+            call mpas_stream_mgr_reset_alarms(domain_ptr % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
+            call mpas_timer_stop('reset_io_alarms')
 
-         ! read next time level data required for variable shortwave
-         call mpas_timer_start('io_shortwave',.false.)
-         call ocn_get_shortWaveData(domain % streamManager, domain, domain % clock, .false.)
-         call mpas_timer_stop('io_shortwave')
+            ! read next time level data required for variable shortwave
+            call mpas_timer_start('io_shortwave',.false.)
+            call ocn_get_shortWaveData(domain_ptr % streamManager, domain, domain % clock, .false.)
+            call mpas_timer_stop('io_shortwave')
 
-         ! read next time level data required for ecosys forcing
-         if (config_use_ecosysTracers) then
-           call mpas_timer_start('io_ecosys',.false.)
-           call ocn_get_ecosysData(domain % streamManager, domain, domain % clock, .false.)
-           call mpas_timer_stop('io_ecosys')
-         endif
+            ! read next time level data required for ecosys forcing
+            if (config_use_ecosysTracers) then
+              call mpas_timer_start('io_ecosys',.false.)
+              call ocn_get_ecosysData(domain_ptr % streamManager, domain, domain % clock, .false.)
+              call mpas_timer_stop('io_ecosys')
+            endif
 
-         ! read next time level data required for CFC forcing
-         if (config_use_CFCTracers) then
-           call mpas_timer_start('io_CFC',.false.)
-           call ocn_get_CFCData(domain % streamManager, domain, domain % clock, .false.)
-           call mpas_timer_stop('io_CFC')
-         endif
+            ! read next time level data required for CFC forcing
+            if (config_use_CFCTracers) then
+              call mpas_timer_start('io_CFC',.false.)
+              call ocn_get_CFCData(domain_ptr % streamManager, domain, domain % clock, .false.)
+              call mpas_timer_stop('io_CFC')
+            endif
 
-         ! read next time level data required for monthly surface salinity restoring
-         if (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) then
-           if ( mpas_is_alarm_ringing(domain % clock, 'salinityDataReadAlarm', ierr=err_tmp) ) then
-              call mpas_reset_clock_alarm(domain % clock, 'salinityDataReadAlarm', ierr=err_tmp)
-              call mpas_timer_start('io_monthly_surface_salinity',.false.)
-              call ocn_get_surfaceSalinityData(domain % streamManager, domain, domain % clock, .false.)
-              call mpas_timer_stop('io_monthly_surface_salinity')
-           endif
-         endif
+            ! read next time level data required for monthly surface salinity restoring
+            if (config_use_activeTracers_surface_restoring .and. config_use_surface_salinity_monthly_restoring) then
+              if ( mpas_is_alarm_ringing(domain_ptr % clock, 'salinityDataReadAlarm', ierr=err_tmp) ) then
+                 call mpas_reset_clock_alarm(domain_ptr % clock, 'salinityDataReadAlarm', ierr=err_tmp)
+                 call mpas_timer_start('io_monthly_surface_salinity',.false.)
+                 call ocn_get_surfaceSalinityData(domain_ptr % streamManager, domain, domain % clock, .false.)
+                 call mpas_timer_stop('io_monthly_surface_salinity')
+              endif
+            endif
 
-         ! read in next time level data required for time-varying forcing
-         call ocn_time_varying_forcing_get(domain % streamManager, domain, domain % clock)
+            ! read in next time level data required for time-varying forcing
+            call ocn_time_varying_forcing_get(domain_ptr % streamManager, domain, domain % clock)
 
-         ! Validate that the state is OK to run with for the next timestep.
-         call ocn_validate_state(domain, timeLevel=1)
+            ! Validate that the state is OK to run with for the next timestep.
+            call ocn_validate_state(domain_ptr, timeLevel=1)
+            domain_ptr => domain_ptr % next
+         enddo
 
       end do
 
