@@ -875,13 +875,10 @@ module ocn_time_integration_split
                                                         normalBarotropicVelocityNew,&
                                                         sshTend)
 
-           call mpas_dmpar_exch_group_create(domain_btr, subcycleGroupName)
-           call mpas_dmpar_exch_group_add_field(domain_btr, subcycleGroupName, &
-                                                'sshSubcycle')
-           call mpas_dmpar_exch_group_add_field(domain_btr, subcycleGroupName, &
-                                       'normalBarotropicVelocitySubcycle')
-           call mpas_dmpar_exch_group_build_reusable_buffers(domain_btr, &
-                                                          subcycleGroupName)
+           ! copy what was done above where sshNew=sshCur
+           do iCell = 1,nCellsAll
+              sshNew(iCell)=sshCur(iCell)
+           enddo
                                                      
          endif
 
@@ -1650,6 +1647,11 @@ module ocn_time_integration_split
 
             if (config_spatial_mode_splitting) then
 
+              ! put sshSubcycleNew into sshNew for barotropic domain
+              do iCell = 1,nCellsAll
+                 sshNew(iCell) = sshSubcycleNew(iCell)
+              enddo
+
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
@@ -1664,14 +1666,6 @@ module ocn_time_integration_split
                                                            normalBarotropicVelocityCur,&
                                                            normalBarotropicVelocityNew,&
                                                            sshTend)
-
-               call mpas_dmpar_exch_group_create(domain, subcycleGroupName)
-               call mpas_dmpar_exch_group_add_field(domain, subcycleGroupName, &
-                                                    'sshSubcycle')
-               call mpas_dmpar_exch_group_add_field(domain, subcycleGroupName, &
-                                                    'normalBarotropicVelocitySubcycle')
-               call mpas_dmpar_exch_group_build_reusable_buffers(domain, &
-                                                                 subcycleGroupName)
 
             endif
 
@@ -1804,9 +1798,6 @@ module ocn_time_integration_split
                                     layerThickEdgeFlux(k,iEdge)
                   enddo
 
-                  ! if (config_spatial_mode_splitting) then
-                  !    use uavg = F-sum... instead of velocity correction
-                  ! endif
                   normalVelocityCorrection = useVelocityCorrection* &
                                 ((barotropicThicknessFlux(iEdge) - &
                                   normalThicknessFluxSum)/thicknessSum)
@@ -2979,6 +2970,8 @@ module ocn_time_integration_split
       integer, pointer :: nVertLevels, nCells, nEdges
 
       integer (kind=I8KIND) :: nBtrSubcyclesI8
+
+      type (domain_type), pointer :: domain_ptr
 
       ! End preamble
       !-----------------------------------------------------------------

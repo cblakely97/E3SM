@@ -778,6 +778,9 @@ contains
         do iCell = 1,nCellsSolve_btr
             barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
             barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
+            !
+            barotropicForcingZonal_btr(iCell)=barotropicForcingZonal_bc(iCell)
+            barotropicForcingMeridional_btr(iCell)=barotropicForcingMeridional_bc(iCell)
         enddo
 
         ! perform halo exchange
@@ -785,13 +788,13 @@ contains
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
 
         ! put back into edge based arrays
-        barotropicForcing_btr(:) = 0d0
+        barotropicForcing_btr(:) = 0_RKIND
         do iEdge = 1,nEdgesSolve_btr
             cell1 = cellsOnEdge_btr(1, iEdge)
             cell2 = cellsOnEdge_btr(2, iEdge)
-            zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
+            zonal_edge = 0.5_RKIND * (barotropicForcingZonal_btr(cell1) + &
                                   barotropicForcingZonal_btr(cell2))
-            meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
+            meridional_edge = 0.5_RKIND * (barotropicForcingMeridional_btr(cell1) + &
                                        barotropicForcingMeridional_btr(cell2))
             barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
                                            cos(angleEdge_btr(iEdge))*zonal_edge + &
@@ -1015,6 +1018,9 @@ contains
         do iCell = 1,nCellsSolve_bc
             barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
             barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
+            !
+            barotropicThicknessFluxZonal_bc(iCell)=barotropicThicknessFluxZonal_btr(iCell)
+            barotropicThicknessFluxMeridional_bc(iCell)=barotropicThicknessFluxMeridional_btr(iCell)
         enddo
 
         ! exchange halos
@@ -1022,13 +1028,13 @@ contains
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
 
         ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0d0
+        barotropicThicknessFlux_bc(:)=0_RKIND
         do iEdge = 1,nEdgesSolve_bc
            cell1 = cellsOnEdge_bc(1, iEdge)
            cell2 = cellsOnEdge_bc(2,iEdge)
-           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
+           zonal_edge = 0.5_RKIND * (barotropicThicknessFluxZonal_bc(cell1) + &
                                  barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
+           meridional_edge = 0.5_RKIND * (barotropicThicknessFluxMeridional_bc(cell1) + &
                                       barotropicThicknessFluxMeridional_bc(cell2))
            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
                                             cos(angleEdge_bc(iEdge))*zonal_edge + &
@@ -1130,20 +1136,25 @@ contains
        ! baroclinic domain was passed. end of barotropic subcycle. 
        ! send barotropicThicknessFlux from barotropic to baroclinic
        !call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
-
+       call mpas_log_write('destroying barotropic domain and building baroclinic',&
+                           MPAS_LOG_ERR)
     elseif ( domain % domainID .eq. 1 ) then
 
        ! barotropic domain was passed. beginning of barotropic subcycle.
        ! send barotropicForcing from baroclinic to barotropic.
        !call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+       call mpas_log_write('destroying baroclinic domain and building barotropic',&
+                           MPAS_LOG_ERR)
 
     endif
 
     ! destroy current mesh data
     call ocn_meshDestroy(ierr)
+    call mpas_log_write('destroyed',MPAS_LOG_ERR)
 
     ! create new mesh
     call ocn_meshCreate(domain)
+    call mpas_log_write('created',MPAS_LOG_ERR)
 
     ! redirect pools
     block => domain%blocklist
