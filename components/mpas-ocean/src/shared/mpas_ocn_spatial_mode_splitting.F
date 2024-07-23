@@ -35,6 +35,7 @@ module ocn_spatial_mode_splitting
     use mpas_moabmesh
     use mpas_dmpar
     use mpas_vector_reconstruction
+    use mpas_vector_operations
 
     use ocn_diagnostics_variables
     use ocn_mesh
@@ -67,7 +68,8 @@ module ocn_spatial_mode_splitting
     public :: ocn_spatial_mode_splitting_init_moab_domain,&
               ocn_spatial_mode_splitting_setup_domain,&
               ocn_spatial_mode_splitting_bc2btr_remapping,&
-              ocn_spatial_mode_splitting_btr2bc_remapping
+              ocn_spatial_mode_splitting_btr2bc_remapping,&
+              ocn_spatial_mode_splitting_time_int_split_setup_btr
 
     !--------------------------------------------------------------------
     !
@@ -115,6 +117,16 @@ module ocn_spatial_mode_splitting
                                  fv_method
     integer :: disc_order, fNoBubble, fMonotoneTypeID, fVolumetric, fNoConserve,&
                fValidate, fInverseDistanceMap
+    ! These edge-based quantities are used in remapping but are local variables only.
+   real (kind=RKIND), dimension(:), allocatable :: barotropicForcingOnEdgeZonal_bc,&
+                                                   barotropicForcingOnEdgeMeridional_bc,&
+                                                   barotropicForcingOnEdgeZonal_btr,&
+                                                   barotropicForcingonEdgeMeridional_btr,&
+                                                   barotropicThicknessFluxOnEdgeZonal_bc,&
+                                                   barotropicThicknessFluxOnEdgeMeridional_bc,&
+                                                   barotropicThicknessFluxOnEdgeZonal_btr,&
+                                                   barotropicThicknessFluxOnEdgeMeridional_btr
+
 
     ! The following variables are the cartesian coordinate components of 
     ! the fields that are used for remapping. They are outputs of 
@@ -165,6 +177,9 @@ contains
     ! number of vertices on meshes
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr
 
+    ! number of edges in mesh
+    integer, pointer :: nEdgesSolve_bc, nEdgesSolve_btr
+
     ! edge tangent vectors for calculating cell-centered quantities
     real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors_bc
     real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors_btr
@@ -205,11 +220,20 @@ contains
        ! initialize moab domain
        call init_moab_mpas(domain, cmpbc, cmpbcPID, bcComm)
 
+       ! get mesh size for allocating local variables
+       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+
+       ! allocate edge-based meridional and zonal component arrays
+       allocate ( barotropicForcingOnEdgeZonal_bc(nEdgesSolve_bc),&
+                  barotropicForcingOnEdgeMeridional_bc(nEdgesSolve_bc),&
+                  barotropicThicknessFluxOnEdgeZonal_bc(nEdgesSolve_bc),&
+                  barotropicThicknessFluxOnEdgeMeridional_bc(nEdgesSolve_bc) )
+
        ! allocate barotropicForcingX_bc, barotropicForcingY_bc, barotropicForcingZ_bc for baroclinic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
-       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
        allocate ( barotropicForcingX_bc(nCellsSolve_bc),&
                   barotropicForcingY_bc(nCellsSolve_bc),&
                   barotropicForcingZ_bc(nCellsSolve_bc) )
@@ -219,7 +243,7 @@ contains
        call mpas_pool_get_array(meshPool, 'edgeTangentVectors', edgeTangentVectors_bc)
        call mpas_rbf_interp_initialize(meshPool)
        call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_bc)
-       call mpas_init_reconstruct(meshPool)
+       call mpas_init_reconstruct(meshPool,.true.)
        return
     elseif ( domain % domainID .eq. 1 ) then
 
@@ -236,11 +260,20 @@ contains
        ! initialize moab domain
        call init_moab_mpas(domain, cmpbtr, cmpbtrPID, btrComm)
 
+       ! get mesh size for allocating local variables
+       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+
+       ! allocate edge-based meridional and zonal component arrays
+       allocate ( barotropicForcingOnEdgeZonal_btr(nEdgesSolve_btr),&
+                  barotropicForcingOnEdgeMeridional_btr(nEdgesSolve_btr),&
+                  barotropicThicknessFluxOnEdgeZonal_btr(nEdgesSolve_btr),&
+                  barotropicThicknessFluxOnEdgeMeridional_btr(nEdgesSolve_btr) )
+
        ! allocate barotropicThicknessFluxX, etc. for barotropic
        ! domain. They are not used in calculations but are outputs from mpas_reconstruct
        ! so we need to have them hanging around.
-       call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
        allocate ( barotropicThicknessFluxX_btr(nCellsSolve_btr),&
                   barotropicThicknessFluxY_btr(nCellsSolve_btr),&
                   barotropicThicknessFluxZ_btr(nCellsSolve_btr) )
@@ -602,9 +635,11 @@ contains
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
+    type (mpas_pool_type), pointer :: statePool
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
-                        nEdgesSolve_bc, nEdgesSolve_btr
+                        nEdgesSolve_bc, nEdgesSolve_btr,&
+                        vertexDegree_btr
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
                                                 barotropicForcing_btr,&
@@ -616,11 +651,15 @@ contains
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
     real (kind=RKIND), dimension(:), pointer :: angleEdge_btr
-    integer, dimension(:,:), pointer :: cellsOnEdge_btr
+    integer, dimension(:,:), pointer :: cellsOnEdge_btr,&
+                                        verticesOnEdge_btr,&
+                                        cellsOnVertex_btr
+    real (kind=RKIND), dimension(:,:), pointer :: kiteAreasOnVertex_btr
     ! looping variables
     integer :: iCell, iEdge
     ! error handling
     integer :: ierr
+
 
     ! End preamble
     !-----------------------------------------------------------------
@@ -756,6 +795,14 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
+
+        ! get connectivity/etc.
+        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_btr)
+        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_btr)
+        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_btr)
+        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_btr)
+        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_btr)
 
         ! get barotropicForcing from pools
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_btr)
@@ -763,8 +810,6 @@ contains
                                  barotropicForcingZonal_btr)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
                                  barotropicForcingMeridional_btr)
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_btr)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_btr)
 
         ! get remapped data from iMOAB
         ierr = iMOAB_GetDoubleTagStorage(cmpbtrPID,&
@@ -779,27 +824,36 @@ contains
             barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
             barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
             !
-            barotropicForcingZonal_btr(iCell)=barotropicForcingZonal_bc(iCell)
-            barotropicForcingMeridional_btr(iCell)=barotropicForcingMeridional_bc(iCell)
+!            barotropicForcingZonal_btr(iCell)=barotropicForcingZonal_bc(iCell)
+!            barotropicForcingMeridional_btr(iCell)=barotropicForcingMeridional_bc(iCell)
         enddo
 
         ! perform halo exchange
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
 
+        ! reconstruct cell based zonal and meridional components to edge-based zonal and meridional
+        ! components
+        call mpas_vector_cell_to_edge_isotropic(barotropicForcingZonal_btr,&
+                                                barotropicForcingMeridional_btr,&
+                                                nEdgesSolve_btr,&
+                                                vertexDegree_btr,&
+                                                verticesOnEdge_btr,&
+                                                cellsOnVertex_btr,&
+                                                kiteAreasOnVertex_btr,&
+                                                barotropicForcingOnEdgeZonal_btr,&
+                                                barotropicForcingOnEdgeMeridional_btr)
+
         ! put back into edge based arrays
-        barotropicForcing_btr(:) = 0_RKIND
-        do iEdge = 1,nEdgesSolve_btr
-            cell1 = cellsOnEdge_btr(1, iEdge)
-            cell2 = cellsOnEdge_btr(2, iEdge)
-            zonal_edge = 0.5_RKIND * (barotropicForcingZonal_btr(cell1) + &
-                                  barotropicForcingZonal_btr(cell2))
-            meridional_edge = 0.5_RKIND * (barotropicForcingMeridional_btr(cell1) + &
-                                       barotropicForcingMeridional_btr(cell2))
-            barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
-                                           cos(angleEdge_btr(iEdge))*zonal_edge + &
-                                           sin(angleEdge_btr(iEdge))*meridional_edge
-        enddo
+         barotropicForcing_btr(:) = 0_RKIND
+         do iEdge = 1,nEdgesSolve_btr
+            barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
+                          cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
+                          sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
+           ! carry over edge-based values
+           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
+         enddo
+
         block_ptr => block_ptr % next
     enddo
 #endif
@@ -1019,8 +1073,8 @@ contains
             barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
             barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
             !
-            barotropicThicknessFluxZonal_bc(iCell)=barotropicThicknessFluxZonal_btr(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell)=barotropicThicknessFluxMeridional_btr(iCell)
+!            barotropicThicknessFluxZonal_bc(iCell)=barotropicThicknessFluxZonal_btr(iCell)
+!            barotropicThicknessFluxMeridional_bc(iCell)=barotropicThicknessFluxMeridional_btr(iCell)
         enddo
 
         ! exchange halos
@@ -1039,6 +1093,8 @@ contains
            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
                                             cos(angleEdge_bc(iEdge))*zonal_edge + &
                                             sin(angleEdge_bc(iEdge))*meridional_edge
+          ! direct carry over
+          barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
         enddo
         block_ptr => block_ptr % next
     enddo
@@ -1136,25 +1192,19 @@ contains
        ! baroclinic domain was passed. end of barotropic subcycle. 
        ! send barotropicThicknessFlux from barotropic to baroclinic
        !call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
-       call mpas_log_write('destroying barotropic domain and building baroclinic',&
-                           MPAS_LOG_ERR)
     elseif ( domain % domainID .eq. 1 ) then
 
        ! barotropic domain was passed. beginning of barotropic subcycle.
        ! send barotropicForcing from baroclinic to barotropic.
        !call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
-       call mpas_log_write('destroying baroclinic domain and building barotropic',&
-                           MPAS_LOG_ERR)
 
     endif
 
     ! destroy current mesh data
     call ocn_meshDestroy(ierr)
-    call mpas_log_write('destroyed',MPAS_LOG_ERR)
 
     ! create new mesh
     call ocn_meshCreate(domain)
-    call mpas_log_write('created',MPAS_LOG_ERR)
 
     ! redirect pools
     block => domain%blocklist
@@ -1189,6 +1239,159 @@ contains
 !-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_setup_domain !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_time_int_spit_setup_btr
+!
+!> \brief initializes split-explicit variables on barotropic domain
+!> \author Coleman Blakely
+!> \date   April, 2024
+!> \details
+!> This subroutine initializes the variables needed in the barotropic
+!> subcycling of the split-explicit time integration on the barotropic
+!> domain when spatial mode splitting is active. At present, that
+!> only involves setting sshNew_btr equal to sshCur_btr because 
+!> normalBarotropicVelocity is handled within the split-explicit time
+!> stepping routine
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_time_int_split_setup_btr(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    type(block_type), pointer :: block_ptr  ! variables in current subblock
+
+    type(mpas_pool_type), pointer :: meshPool, statePool
+
+    ! meshPool
+    integer, pointer :: nCellsSolve
+    
+    ! statePool
+    real (kind=RKIND), pointer, dimension(:) :: sshCur_btr,&
+                                                sshNew_btr
+                                                       
+
+    ! loop indices
+    integer :: iCell
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+
+        ! setup pools
+        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+        ! get nCells and sea surface heights
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+        call mpas_pool_get_array(statePool, 'ssh', sshCur_btr, 1)
+        call mpas_pool_get_array(statePool, 'ssh', sshNew_btr, 2)
+
+        do iCell = 1, nCellsSolve
+           sshNew_btr(iCell) = sshCur_btr(iCell)
+        enddo
+
+        block_ptr => block_ptr % next
+    enddo
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_time_int_split_setup_btr !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_time_int_split_reset_variables
+!
+!> \brief resets variables for iterating on barotropic subcycle
+!> \author Coleman Blakely
+!> \date   April, 2024
+!> \details
+!> This subroutine resets the variables used in barotropic subcycling
+!> on the barotropic domain in the split-explicit time integration
+!> scheme for iterating over the baroclinic timestep
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_time_int_split_reset_variables(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    type(block_type), pointer :: block_ptr  ! variables in current subblock
+
+    type(mpas_pool_type), pointer :: meshPool, statePool
+
+    ! meshPool
+    integer, pointer :: nCellsSolve
+    
+    ! statePool
+    real (kind=RKIND), pointer, dimension(:) :: sshCur_btr,&
+                                                sshNew_btr
+                                                       
+
+    ! loop indices
+    integer :: iCell
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+
+        ! setup pools
+        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+        ! get nCells and sea surface heights
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+        call mpas_pool_get_array(statePool, 'ssh', sshCur_btr, 1)
+        call mpas_pool_get_array(statePool, 'ssh', sshNew_btr, 2)
+
+        do iCell = 1, nCellsSolve
+           sshNew_btr(iCell) = sshCur_btr(iCell)
+        enddo
+
+        block_ptr => block_ptr % next
+    enddo
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_time_int_split_reset_variables !}}}
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 ! vim: foldmethod=marker

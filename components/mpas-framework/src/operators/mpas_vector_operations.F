@@ -52,7 +52,8 @@ module mpas_vector_operations
              mpas_vector_LonLatR_to_R3, &
              mpas_zonal_meridional_vectors, &
              mpas_fix_periodicity, &
-             mpas_unit_test_fix_periodicity
+             mpas_unit_test_fix_periodicity, &
+             mpas_vector_cell_to_edge_isotropic
 
 
    !--------------------------------------------------------------------
@@ -943,6 +944,105 @@ contains
       endif
 
    end subroutine mpas_unit_test_fix_periodicity!}}}
+
+!-----------------------------------------------------------------------
+!
+!  routine mpas_vector_cell_to_edge_isotropic
+!
+!> \brief   Interpolate a 2d vector field from cell centers to edges
+!> \author  Xylar Asay-Davis
+!> \date    May 2024
+!> \details
+!>  This subroutine interpolates a 2D vector field on the sphere to edges
+!>  using an isotropic approach that uses 4 adjacent cell centers
+!
+!-----------------------------------------------------------------------
+
+   subroutine mpas_vector_cell_to_edge_isotropic(zonalCell, meridionalCell, &
+      nEdges, vertexDegree, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, &
+      zonalEdge, meridionalEdge)!{{{
+
+      !-----------------------------------------------------------------
+      !
+      ! input variables
+      !
+      !-----------------------------------------------------------------
+
+      real (kind=RKIND), dimension(:), intent(in) :: &
+         zonalCell, &    !< Input: zonal component of the vector at cell centers
+         meridionalCell  !< Input: meridional component of the vector at cell centers
+
+      integer, intent(in) :: &
+         nEdges, &    !< Input: The number of edges (level of halo) to include in the computation
+         vertexDegree !< Input: The number of edges and cells adjacent to each vertex
+
+      integer, dimension(:,:), intent(in) :: &
+         verticesOnEdge, &  !< Input: vertices adjacent to each mesh edge
+         cellsOnVertex      !< Input: cells adjacent to each mesh vertex
+
+      real (kind=RKIND), dimension(:, :), intent(in) :: &
+         kiteAreasOnVertex  !< Input: The area of elements bounded by a cell, a vertex and
+                            !<        the centers of the two edges they share
+
+      !-----------------------------------------------------------------
+      !
+      ! output variables
+      !
+      !-----------------------------------------------------------------
+
+      real (kind=RKIND), dimension(:), intent(out) :: &
+         zonalEdge, &    !< Input: zonal component of the vector at cell centers
+         meridionalEdge  !< Input: meridional component of the vector at cell centers
+
+      !-----------------------------------------------------------------
+      !
+      ! local variables
+      !
+      !-----------------------------------------------------------------
+
+      integer :: iEdge, iVert, iCell, v, c
+
+      real (kind=RKIND) :: area, areaSum, zonal, meridional
+
+#ifdef MPAS_OPENACC
+      !$acc parallel loop gang vector &
+      !$acc    present(verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, &
+      !$acc            zonalCell, meridionalCell, &
+      !$acc            zonalEdge, meridionalEdge) &
+      !$acc    private(areaSum, area, v, c, iVert, iCell)
+#else
+      !$omp parallel
+      !$omp do schedule(runtime) &
+      !$omp    private(areaSum, area, v, c, iVert, iCell)
+#endif
+      do iEdge = 1, nEdges
+         zonalEdge(iEdge) = 0.0_RKIND
+         meridionalEdge(iEdge) = 0.0_RKIND
+         areaSum = 0.0_RKIND
+         do v = 1, 2
+            iVert = verticesOnEdge(v, iEdge)
+            do c = 1, vertexDegree
+               iCell = cellsOnVertex(c, iVert)
+               ! kite areas are zero for invalid cells on vertex
+               area = kiteAreasOnVertex(c, iVert)
+
+               zonalEdge(iEdge) = zonalEdge(iEdge) &
+                                + zonalCell(iCell) * area
+               meridionalEdge(iEdge) = meridionalEdge(iEdge) &
+                                     + meridionalCell(iCell) * area
+
+               areaSum = areaSum + area
+            end do
+         end do
+         zonalEdge(iEdge) = zonalEdge(iEdge) / areaSum
+         meridionalEdge(iEdge) = meridionalEdge(iEdge) / areaSum
+      end do
+#ifndef MPAS_OPENACC
+      !$omp end do
+      !$omp end parallel
+#endif
+
+   end subroutine mpas_vector_cell_to_edge_isotropic!}}}
 
 end module mpas_vector_operations
 

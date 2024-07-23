@@ -203,7 +203,8 @@ module ocn_time_integration_split
          sshTemp,          &
          deltaSSH,         &
          wctEdge,          &! flux water column thickness at edge
-         baroclinicThickness
+         baroclinicThickness,&
+         baroclinicThickness_bc ! for storing baroclinic thicknesses during spatial-split subcycling
 
       ! State Array Pointers
       real (kind=RKIND), dimension(:), pointer :: &
@@ -287,7 +288,7 @@ module ocn_time_integration_split
          layerThicknessLagNew
 
       ! variables for spatial mode splitting
-      type (domain_type), pointer :: domain_btr         ! barotropic domain pointer
+      type (domain_type), pointer :: domain_btr, domain_ptr         ! barotropic domain pointer
 
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
@@ -335,6 +336,13 @@ module ocn_time_integration_split
 
         ! "next" domain is barotropic domain
         domain_btr => domain % next
+
+        ! initialize split-explicit variables for first iteration
+        call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain_btr)
+
+        ! we need a temporary array to store the baroclinic thicknesses on the baroclinic domain
+        ! during the barotropic subcycling
+        allocate(baroclinicThickness_bc(nEdgesAll+1))
 
       endif
 
@@ -860,6 +868,8 @@ module ocn_time_integration_split
 
          if (config_spatial_mode_splitting) then
 
+           ! TODO: move this inside one subroutine
+
            ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
@@ -875,11 +885,20 @@ module ocn_time_integration_split
                                                         normalBarotropicVelocityNew,&
                                                         sshTend)
 
-           ! copy what was done above where sshNew=sshCur
-           do iCell = 1,nCellsAll
-              sshNew(iCell)=sshCur(iCell)
+           ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
+           ! spatial-split barotropic subcycling
+           baroclinicThickness_bc(:)=baroclinicThickness(:)
+
+           ! put bathymetric depths into baroclinicThickness for barotropic subcycling
+           deallocate(baroclinicThickness)
+           allocate(baroclinicThickness(nEdgesAll+1))
+           baroclinicThickness(:)=0d0
+           do iEdge=1,nEdgesAll
+              if (maxLevelEdgeTop(iEdge)==0) cycle
+              cell1 = cellsOnEdge(1,iEdge)
+              cell2 = cellsOnEdge(2,iEdge)
+              baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
            enddo
-                                                     
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1640,18 +1659,53 @@ module ocn_time_integration_split
 
             call mpas_timer_stop('btr se norm')
 
+            ! boundary update on F
+            call mpas_timer_start("se halo F and btr vel")
+
+            ! TODO: see of we need this or not
+            ! if we are using spatial mode splitting the halo exchange 
+            ! needs to happen on the barotropic domain (domain % next)
+            domain_ptr => domain % core % domainlist
+            if (config_spatial_mode_splitting) then
+               domain_ptr => domain_ptr % next
+            endif
+
+            call mpas_dmpar_exch_group_create(domain_ptr, finalBtrGroupName)
+
+            call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                              finalBtrGroupName, &
+                                             'barotropicThicknessFlux')
+            call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                              finalBtrGroupName, &
+                                             'normalBarotropicVelocity', &
+                                              timeLevel=2)
+
+            call mpas_dmpar_exch_group_full_halo_exch(domain_ptr, &
+                                                      finalBtrGroupName)
+
+            call mpas_dmpar_exch_group_destroy(domain_ptr,finalBtrGroupName)
+            call mpas_timer_stop("se halo F and btr vel")
+
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            ! remap barotropicForcing from baroclinic domain to barotropic
-            ! domain for spatial mode splitting. 
+            ! remap barotropicThicknessFlux from barotropic domain to 
+            ! baroclinic domain
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             if (config_spatial_mode_splitting) then
-
-              ! put sshSubcycleNew into sshNew for barotropic domain
-              do iCell = 1,nCellsAll
-                 sshNew(iCell) = sshSubcycleNew(iCell)
-              enddo
-
+              if (splitExplicitStep < numTSIterations) then
+                 do iCell = 1,nCellsAll
+                    sshCur(iCell)=0.5_RKIND*(sshCur(iCell)+sshSubcycleNew(iCell))
+                 enddo
+              elseif (splitExplicitStep == numTSIterations) then
+                 do iCell = 1,nCellsAll
+                    sshNew(iCell)=sshSubcycleNew(iCell)
+                 enddo
+              endif
+              
+              ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
+              !do iEdge = 1,nEdges
+              !  normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
+              !enddo
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
@@ -1667,25 +1721,12 @@ module ocn_time_integration_split
                                                            normalBarotropicVelocityNew,&
                                                            sshTend)
 
+              ! get baroclinic thicknesses back from baroclinicThickness_bc
+              deallocate(baroclinicThickness)
+              allocate(baroclinicThickness(nEdgesAll+1))
+              baroclinicThickness(:)=baroclinicThickness_bc(:)
+
             endif
-
-            ! boundary update on F
-            call mpas_timer_start("se halo F and btr vel")
-            call mpas_dmpar_exch_group_create(domain, finalBtrGroupName)
-
-            call mpas_dmpar_exch_group_add_field(domain, &
-                                              finalBtrGroupName, &
-                                             'barotropicThicknessFlux')
-            call mpas_dmpar_exch_group_add_field(domain, &
-                                              finalBtrGroupName, &
-                                             'normalBarotropicVelocity', &
-                                              timeLevel=2)
-
-            call mpas_dmpar_exch_group_full_halo_exch(domain, &
-                                                      finalBtrGroupName)
-
-            call mpas_dmpar_exch_group_destroy(domain,finalBtrGroupName)
-            call mpas_timer_stop("se halo F and btr vel")
 
             ! Check that you can compute SSH using the total sum or the
             ! individual increments over the barotropic subcycles.
@@ -1785,6 +1826,10 @@ module ocn_time_integration_split
                   normalVelocityCorrection = useVelocityCorrection* &
                                 ((barotropicThicknessFlux(iEdge) - &
                                   normalThicknessFluxSum)/thicknessSum)
+
+                  ! Because of reformulation, the "barotropic velocity" is now equal to the total
+                  ! velocity correction
+                  normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
                else
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
                                            uTemp(minLevelEdgeBot(iEdge),iEdge)
@@ -3124,7 +3169,7 @@ module ocn_time_integration_split
                   normalThicknessFluxSum = normalThicknessFluxSum + &
                                            layerThicknessEdge1* &
                                            normalVelocity(k,iEdge)
-                  layerThicknessSum = layerThicknessSum + &
+                                        layerThicknessSum = layerThicknessSum + &
                                       layerThicknessEdge1
 
                enddo
