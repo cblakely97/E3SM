@@ -899,6 +899,9 @@ module ocn_time_integration_split
               cell2 = cellsOnEdge(2,iEdge)
               baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
            enddo
+
+           ! TEMP: just carry the values over directly
+           baroclinicThickness(:)=baroclinicThickness_bc(:)
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
