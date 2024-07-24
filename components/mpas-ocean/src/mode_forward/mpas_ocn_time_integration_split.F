@@ -1705,10 +1705,13 @@ module ocn_time_integration_split
                  enddo
               endif
               
+              ! THIS APPEARS TO MAKE IT WORSE SO DON'T USE IT
               ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
               !do iEdge = 1,nEdges
               !  normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
               !enddo
+              ! THIS MAKES IT WORSE (END)
+
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
@@ -1728,6 +1731,9 @@ module ocn_time_integration_split
               deallocate(baroclinicThickness)
               allocate(baroclinicThickness(nEdgesAll+1))
               baroclinicThickness(:)=baroclinicThickness_bc(:)
+
+              ! reset normalBarotropicVelocityNew to 0 since we calculate it a little later
+              normalBarotropicVelocityNew(:)=0d0
 
             endif
 
@@ -1833,6 +1839,7 @@ module ocn_time_integration_split
                   ! Because of reformulation, the "barotropic velocity" is now equal to the total
                   ! velocity correction
                   normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
+
                else
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
                                            uTemp(minLevelEdgeBot(iEdge),iEdge)
