@@ -987,6 +987,11 @@ module ocn_time_integration_split
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
                sshSubcycleCur(iCell) = sshCur(iCell)
+
+               ! TEMP: trying out averaging the ssh over the subcycles?
+               if (config_spatial_mode_splitting) then
+                  sshNew(iCell) = sshCur(iCell)
+               endif
             end do
             !$omp end do
 
@@ -1286,6 +1291,13 @@ module ocn_time_integration_split
                   end do ! edges
                   !$omp end do
                   !$omp end parallel
+
+                  ! TEMP: trying out averaging the ssh over the subcycles?
+                  if (config_spatial_mode_splitting) then
+                     do iCell = 1,nCellsAll
+                        sshNew(iCell) = sshNew(iCell) + sshSubcycleNew(iCell)
+                     end do
+                  end if
 
                endif
 
@@ -1660,6 +1672,14 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 
+            ! TEMP: trying out averaging the ssh over the subcycles?
+            if (config_spatial_mode_splitting) then
+               do iCell = 1,nCellsAll
+                  sshNew(iCell) =sshNew(iCell) &
+                        / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
+               end do
+            endif
+
             call mpas_timer_stop('btr se norm')
 
             ! boundary update on F
@@ -1697,19 +1717,19 @@ module ocn_time_integration_split
             if (config_spatial_mode_splitting) then
               if (splitExplicitStep < numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshCur(iCell)=0.5_RKIND*(sshCur(iCell)+sshSubcycleNew(iCell))
+                    sshCur(iCell)=0.5_RKIND*(sshCur(iCell)+sshNew(iCell))
                  enddo
               elseif (splitExplicitStep == numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshNew(iCell)=sshSubcycleNew(iCell)
+                    sshNew(iCell)=sshNew(iCell)
                  enddo
               endif
               
               ! THIS APPEARS TO MAKE IT WORSE SO DON'T USE IT
               ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
-              !do iEdge = 1,nEdges
-              !  normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
-              !enddo
+              do iEdge = 1,nEdges
+                normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
+              enddo
               ! THIS MAKES IT WORSE (END)
 
               ! remap barotropicThicknessFlux
