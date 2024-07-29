@@ -204,7 +204,10 @@ module ocn_time_integration_split
          deltaSSH,         &
          wctEdge,          &! flux water column thickness at edge
          baroclinicThickness,&
-         baroclinicThickness_bc ! for storing baroclinic thicknesses during spatial-split subcycling
+         baroclinicThickness_bc,& ! for storing baroclinic thicknesses during spatial-split subcycling
+         sshNew_bc,&
+         sshCur_bc,&
+         normalBarotropicVelocityNew_btr
 
       ! State Array Pointers
       real (kind=RKIND), dimension(:), pointer :: &
@@ -334,11 +337,17 @@ module ocn_time_integration_split
 
       if ( config_spatial_mode_splitting) then
 
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "first config_spatial_mode..."
+        write(6,*) ""
+        write(6,*) ""
+
         ! "next" domain is barotropic domain
         domain_btr => domain % next
 
         ! initialize split-explicit variables for first iteration
-        call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain_btr)
+        call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain)
 
         ! we need a temporary array to store the baroclinic thicknesses on the baroclinic domain
         ! during the barotropic subcycling
@@ -868,6 +877,12 @@ module ocn_time_integration_split
 
          if (config_spatial_mode_splitting) then
 
+           allocate( sshNew_bc(nCellsAll), sshCur_bc(nCellsAll) )
+           do iCell = 1,nCellsAll
+              sshNew_bc(iCell)=sshNew(iCell)
+              sshCur_bc(iCell)=sshCur(iCell)
+           enddo
+
            ! TODO: move this inside one subroutine
 
            ! remap barotropicForcing
@@ -887,21 +902,33 @@ module ocn_time_integration_split
 
            ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
            ! spatial-split barotropic subcycling
-           baroclinicThickness_bc(:)=baroclinicThickness(:)
-
-           ! put bathymetric depths into baroclinicThickness for barotropic subcycling
-           deallocate(baroclinicThickness)
-           allocate(baroclinicThickness(nEdgesAll+1))
-           baroclinicThickness(:)=0d0
+           baroclinicThickness_bc(:)=0d0
            do iEdge=1,nEdgesAll
-              if (maxLevelEdgeTop(iEdge)==0) cycle
-              cell1 = cellsOnEdge(1,iEdge)
-              cell2 = cellsOnEdge(2,iEdge)
-              baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
+              baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
            enddo
 
+           ! put bathymetric depths into baroclinicThickness for barotropic subcycling
+!           deallocate(baroclinicThickness)
+!           allocate(baroclinicThickness(nEdgesAll+1))
+!           baroclinicThickness(:)=0d0
+!           do iEdge=1,nEdgesAll
+!              if (maxLevelEdgeTop(iEdge)==0) cycle
+!              cell1 = cellsOnEdge(1,iEdge)
+!              cell2 = cellsOnEdge(2,iEdge)
+!              baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
+!           enddo
+
            ! TEMP: just carry the values over directly
-           baroclinicThickness(:)=baroclinicThickness_bc(:)
+           do iEdge=1,nEdgesAll
+              baroclinicThickness(iEdge)=baroclinicThickness_bc(iEdge)
+           enddo
+
+           !
+           do iCell = 1,nCellsAll
+              sshNew(iCell)=sshNew_bc(iCell)
+              sshCur(iCell)=sshCur_bc(iCell)
+           enddo
+           deallocate(sshNew_bc, sshCur_bc)
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -987,11 +1014,6 @@ module ocn_time_integration_split
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
                sshSubcycleCur(iCell) = sshCur(iCell)
-
-               ! TEMP: trying out averaging the ssh over the subcycles?
-               if (config_spatial_mode_splitting) then
-                  sshNew(iCell) = sshCur(iCell)
-               endif
             end do
             !$omp end do
 
@@ -1291,13 +1313,6 @@ module ocn_time_integration_split
                   end do ! edges
                   !$omp end do
                   !$omp end parallel
-
-                  ! TEMP: trying out averaging the ssh over the subcycles?
-                  if (config_spatial_mode_splitting) then
-                     do iCell = 1,nCellsAll
-                        sshNew(iCell) = sshNew(iCell) + sshSubcycleNew(iCell)
-                     end do
-                  end if
 
                endif
 
@@ -1672,14 +1687,6 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 
-            ! TEMP: trying out averaging the ssh over the subcycles?
-            if (config_spatial_mode_splitting) then
-               do iCell = 1,nCellsAll
-                  sshNew(iCell) =sshNew(iCell) &
-                        / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
-               end do
-            endif
-
             call mpas_timer_stop('btr se norm')
 
             ! boundary update on F
@@ -1715,22 +1722,27 @@ module ocn_time_integration_split
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             if (config_spatial_mode_splitting) then
-              if (splitExplicitStep < numTSIterations) then
-                 do iCell = 1,nCellsAll
-                    sshCur(iCell)=0.5_RKIND*(sshCur(iCell)+sshNew(iCell))
-                 enddo
-              elseif (splitExplicitStep == numTSIterations) then
-                 do iCell = 1,nCellsAll
-                    sshNew(iCell)=sshNew(iCell)
-                 enddo
-              endif
+!              if (splitExplicitStep < numTSIterations) then
+!                 do iCell = 1,nCellsAll
+!                    sshCur(iCell)=0.5_RKIND*(sshCur(iCell)+sshNew(iCell))
+!                 enddo
+!              elseif (splitExplicitStep == numTSIterations) then
+!                 do iCell = 1,nCellsAll
+!                    sshNew(iCell)=sshNew(iCell)
+!                 enddo
+!              endif
+
+              ! TEMP: store normalBarotropicVelocityNew in normalBarotropicVelocityNew_btr so that I
+              ! can carry it over to the baroclinic domain
+              allocate( normalBarotropicVelocityNew_btr(nEdgesAll+1) )
+              do iEdge = 1,nEdges
+                 normalBarotropicVelocityNew_btr(iEdge)=normalBarotropicVelocityNew(iEdge)
+              enddo
               
-              ! THIS APPEARS TO MAKE IT WORSE SO DON'T USE IT
               ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
               do iEdge = 1,nEdges
                 normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
               enddo
-              ! THIS MAKES IT WORSE (END)
 
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
@@ -1747,13 +1759,11 @@ module ocn_time_integration_split
                                                            normalBarotropicVelocityNew,&
                                                            sshTend)
 
-              ! get baroclinic thicknesses back from baroclinicThickness_bc
-              deallocate(baroclinicThickness)
-              allocate(baroclinicThickness(nEdgesAll+1))
-              baroclinicThickness(:)=baroclinicThickness_bc(:)
-
-              ! reset normalBarotropicVelocityNew to 0 since we calculate it a little later
-              normalBarotropicVelocityNew(:)=0d0
+              ! TEMP: carry over normalBarotropicVelocity
+              do iEdge = 1,nEdges
+                normalBarotropicVelocityNew(iEdge)=normalBarotropicVelocityNew_btr(iEdge)
+              enddo
+              deallocate(normalBarotropicVelocityNew_btr)
 
             endif
 
@@ -1837,30 +1847,30 @@ module ocn_time_integration_split
                ! on land boundaries maxLevelEdgeTop=0, but I want to
                ! initialize thicknessSum with a nonzero value to avoid
                ! a NaN.
-               if (config_spatial_mode_splitting) then
-
-                  ! group correction and baroclinic velocities together
-                  normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
-                                           normalBaroclinicVelocityNew(minLevelEdgeBot(iEdge),iEdge)
-                  thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
-
-                  do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
-                     normalThicknessFluxSum = normalThicknessFluxSum + &
-                                              layerThickEdgeFlux(k,iEdge)*&
-                                              normalBaroclinicVelocityNew(k,iEdge)
-                     thicknessSum = thicknessSum + &
-                                    layerThickEdgeFlux(k,iEdge)
-                  enddo
-
-                  normalVelocityCorrection = useVelocityCorrection* &
-                                ((barotropicThicknessFlux(iEdge) - &
-                                  normalThicknessFluxSum)/thicknessSum)
-
-                  ! Because of reformulation, the "barotropic velocity" is now equal to the total
-                  ! velocity correction
-                  normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
-
-               else
+!               if (config_spatial_mode_splitting) then
+!
+!                  ! group correction and baroclinic velocities together
+!                  normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
+!                                           normalBaroclinicVelocityNew(minLevelEdgeBot(iEdge),iEdge)
+!                  thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
+!
+!                  do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+!                     normalThicknessFluxSum = normalThicknessFluxSum + &
+!                                              layerThickEdgeFlux(k,iEdge)*&
+!                                              normalBaroclinicVelocityNew(k,iEdge)
+!                     thicknessSum = thicknessSum + &
+!                                    layerThickEdgeFlux(k,iEdge)
+!                  enddo
+!
+!                  normalVelocityCorrection = useVelocityCorrection* &
+!                                ((barotropicThicknessFlux(iEdge) - &
+!                                  normalThicknessFluxSum)/thicknessSum)
+!
+!                  ! Because of reformulation, the "barotropic velocity" is now equal to the total
+!                  ! velocity correction
+!                  normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
+!
+!               else
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
                                            uTemp(minLevelEdgeBot(iEdge),iEdge)
                   thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
@@ -1876,7 +1886,7 @@ module ocn_time_integration_split
                   normalVelocityCorrection = useVelocityCorrection* &
                                 ((barotropicThicknessFlux(iEdge) - &
                                   normalThicknessFluxSum)/thicknessSum)
-               endif
+!               endif
 
                do k = 1, nVertLevels
 

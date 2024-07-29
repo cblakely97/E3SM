@@ -1286,16 +1286,41 @@ contains
     ! statePool
     real (kind=RKIND), pointer, dimension(:) :: sshCur_btr,&
                                                 sshNew_btr
-                                                       
 
     ! loop indices
     integer :: iCell
+
+    ! TEMP: for debugging we are just carrying stuff over
+    real (kind=RKIND), pointer, dimension(:) :: sshCur_bc
 
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
+    write(6,*) ""
+    write(6,*) ""
+    write(6,*) "inside init routine for spatial mode splitting"
+    write(6,*) ""
+    write(6,*) ""
+
+    ! TEMP: get sshCur_bc
     block_ptr => domain % blocklist
+    do while(associated(block_ptr))
+
+       ! get sshCur from baroclinic domain
+        ! setup pools
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+        ! get nCells and sea surface heights
+        call mpas_pool_get_array(statePool, 'ssh', sshCur_bc, 1)
+
+        block_ptr => block_ptr % next
+    enddo
+    !end TEMP
+
+    ! TEMP: changed to domain % next cuz we needed bc domain too
+    block_ptr => domain % next % blocklist
+    ! end TEMP
     do while(associated(block_ptr))
 
         ! setup pools
@@ -1307,12 +1332,23 @@ contains
         call mpas_pool_get_array(statePool, 'ssh', sshCur_btr, 1)
         call mpas_pool_get_array(statePool, 'ssh', sshNew_btr, 2)
 
+        ! TEMP: put sshCur_bc into sshCur_btr
+        do iCell = 1,nCellsSolve
+           sshCur_btr(iCell) = sshCur_bc(iCell)
+        enddo
+        ! end TEMP
+
         do iCell = 1, nCellsSolve
            sshNew_btr(iCell) = sshCur_btr(iCell)
         enddo
 
         block_ptr => block_ptr % next
     enddo
+    write(6,*) ""
+    write(6,*) ""
+    write(6,*) "put sshNew_btr=sshCur_bc"
+    write(6,*) ""
+    write(6,*) ""
 
 !-------------------------------------------------------------------------------
 
