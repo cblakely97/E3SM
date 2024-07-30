@@ -1739,10 +1739,10 @@ module ocn_time_integration_split
                  normalBarotropicVelocityNew_btr(iEdge)=normalBarotropicVelocityNew(iEdge)
               enddo
               
-              ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
-              do iEdge = 1,nEdges
-                normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
-              enddo
+!              ! put normalBarotropicVelocityNew into normalBarotropicVelocityCur for iteration
+!              do iEdge = 1,nEdges
+!                normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
+!              enddo
 
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
