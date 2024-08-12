@@ -1056,14 +1056,16 @@ module ocn_time_integration_split
 
                   call mpas_timer_start('se halo subcycle')
 
-                  ! loop over both baroclinic and barotropic domain
-                  domain_ptr => domain % core % domainlist
-                  do while (associated(domain_ptr))
-                     call mpas_dmpar_exch_group_reuse_halo_exch(domain_ptr, &
-                          subcycleGroupName, timeLevel=oldBtrSubcycleTime)
+                  ! if spatial mode splitting then exchange on barotropic domain
+                  if (config_spatial_mode_splitting) then
+                     domain_ptr => domain % next
+                  else
+                     domain_ptr => domain % core % domainlist
+                  endif
 
-                     domain_ptr => domain_ptr % next
-                  enddo
+                  ! exchange sshSubcycle and normalBarotropicVelocitySubcycle
+                  call mpas_dmpar_exch_group_reuse_halo_exch(domain_ptr, &
+                       subcycleGroupName, timeLevel=oldBtrSubcycleTime)
 
                   call mpas_timer_stop('se halo subcycle')
 
@@ -1688,27 +1690,28 @@ module ocn_time_integration_split
             ! boundary update on F
             call mpas_timer_start("se halo F and btr vel")
 
-            ! TODO: see of we need this or not
             ! if we are using spatial mode splitting the halo exchange 
             ! needs to happen on the barotropic domain (domain % next)
-            domain_ptr => domain % core % domainlist
-            do while (associated(domain_ptr))
-               call mpas_dmpar_exch_group_create(domain_ptr, finalBtrGroupName)
+            if (config_spatial_mode_splitting) then
+               domain_ptr => domain % next
+            else
+               domain_ptr => domain % core % domainlist
+            endif
+            call mpas_dmpar_exch_group_create(domain_ptr, finalBtrGroupName)
 
-               call mpas_dmpar_exch_group_add_field(domain_ptr, &
-                                                 finalBtrGroupName, &
-                                                'barotropicThicknessFlux')
-               call mpas_dmpar_exch_group_add_field(domain_ptr, &
-                                                 finalBtrGroupName, &
-                                                'normalBarotropicVelocity', &
-                                                 timeLevel=2)
+            call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                              finalBtrGroupName, &
+                                             'barotropicThicknessFlux')
+            call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                              finalBtrGroupName, &
+                                             'normalBarotropicVelocity', &
+                                              timeLevel=2)
 
-               call mpas_dmpar_exch_group_full_halo_exch(domain_ptr, &
-                                                         finalBtrGroupName)
+            call mpas_dmpar_exch_group_full_halo_exch(domain_ptr, &
+                                                      finalBtrGroupName)
 
-               call mpas_dmpar_exch_group_destroy(domain_ptr,finalBtrGroupName)
-               domain_ptr => domain_ptr % next
-            enddo
+            call mpas_dmpar_exch_group_destroy(domain_ptr,finalBtrGroupName)
+
             call mpas_timer_stop("se halo F and btr vel")
 
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

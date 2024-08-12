@@ -1297,12 +1297,6 @@ contains
     !-----------------------------------------------------------------
     ! Begin code
 
-    write(6,*) ""
-    write(6,*) ""
-    write(6,*) "inside init routine for spatial mode splitting"
-    write(6,*) ""
-    write(6,*) ""
-
     ! TEMP: get sshCur_bc
     block_ptr => domain % blocklist
     do while(associated(block_ptr))
