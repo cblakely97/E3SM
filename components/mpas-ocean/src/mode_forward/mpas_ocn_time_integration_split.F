@@ -337,12 +337,6 @@ module ocn_time_integration_split
 
       if ( config_spatial_mode_splitting) then
 
-        write(6,*) ""
-        write(6,*) ""
-        write(6,*) "first config_spatial_mode..."
-        write(6,*) ""
-        write(6,*) ""
-
         ! "next" domain is barotropic domain
         domain_btr => domain % next
 
@@ -1062,13 +1056,15 @@ module ocn_time_integration_split
 
                   call mpas_timer_start('se halo subcycle')
 
-                  if (config_spatial_mode_splitting) then
-                     call mpas_dmpar_exch_group_reuse_halo_exch(domain_btr, &
+                  ! loop over both baroclinic and barotropic domain
+                  domain_ptr => domain % core % domainlist
+                  do while (associated(domain_ptr))
+                     call mpas_dmpar_exch_group_reuse_halo_exch(domain_ptr, &
                           subcycleGroupName, timeLevel=oldBtrSubcycleTime)
-                  else
-                     call mpas_dmpar_exch_group_reuse_halo_exch(domain, &
-                          subcycleGroupName, timeLevel=oldBtrSubcycleTime)
-                  endif
+
+                     domain_ptr => domain_ptr % next
+                  enddo
+
                   call mpas_timer_stop('se halo subcycle')
 
                   ! Reset halo counters after halo update
@@ -1696,24 +1692,23 @@ module ocn_time_integration_split
             ! if we are using spatial mode splitting the halo exchange 
             ! needs to happen on the barotropic domain (domain % next)
             domain_ptr => domain % core % domainlist
-            if (config_spatial_mode_splitting) then
+            do while (associated(domain_ptr))
+               call mpas_dmpar_exch_group_create(domain_ptr, finalBtrGroupName)
+
+               call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                                 finalBtrGroupName, &
+                                                'barotropicThicknessFlux')
+               call mpas_dmpar_exch_group_add_field(domain_ptr, &
+                                                 finalBtrGroupName, &
+                                                'normalBarotropicVelocity', &
+                                                 timeLevel=2)
+
+               call mpas_dmpar_exch_group_full_halo_exch(domain_ptr, &
+                                                         finalBtrGroupName)
+
+               call mpas_dmpar_exch_group_destroy(domain_ptr,finalBtrGroupName)
                domain_ptr => domain_ptr % next
-            endif
-
-            call mpas_dmpar_exch_group_create(domain_ptr, finalBtrGroupName)
-
-            call mpas_dmpar_exch_group_add_field(domain_ptr, &
-                                              finalBtrGroupName, &
-                                             'barotropicThicknessFlux')
-            call mpas_dmpar_exch_group_add_field(domain_ptr, &
-                                              finalBtrGroupName, &
-                                             'normalBarotropicVelocity', &
-                                              timeLevel=2)
-
-            call mpas_dmpar_exch_group_full_halo_exch(domain_ptr, &
-                                                      finalBtrGroupName)
-
-            call mpas_dmpar_exch_group_destroy(domain_ptr,finalBtrGroupName)
+            enddo
             call mpas_timer_stop("se halo F and btr vel")
 
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1735,7 +1730,7 @@ module ocn_time_integration_split
               ! TEMP: store normalBarotropicVelocityNew in normalBarotropicVelocityNew_btr so that I
               ! can carry it over to the baroclinic domain
               allocate( normalBarotropicVelocityNew_btr(nEdgesAll+1) )
-              do iEdge = 1,nEdges
+              do iEdge = 1,nEdgesAll
                  normalBarotropicVelocityNew_btr(iEdge)=normalBarotropicVelocityNew(iEdge)
               enddo
               
@@ -1760,7 +1755,7 @@ module ocn_time_integration_split
                                                            sshTend)
 
               ! TEMP: carry over normalBarotropicVelocity
-              do iEdge = 1,nEdges
+              do iEdge = 1,nEdgesAll
                 normalBarotropicVelocityNew(iEdge)=normalBarotropicVelocityNew_btr(iEdge)
               enddo
               deallocate(normalBarotropicVelocityNew_btr)
@@ -1970,7 +1965,6 @@ module ocn_time_integration_split
 
          ! update halo for thickness tendencies
          call mpas_timer_start("se halo thickness")
-
          call mpas_dmpar_field_halo_exch(domain, 'tendLayerThickness')
 
          call mpas_timer_stop("se halo thickness")

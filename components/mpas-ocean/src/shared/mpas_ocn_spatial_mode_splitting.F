@@ -222,8 +222,8 @@ contains
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
 
        ! allocate edge-based meridional and zonal component arrays
        allocate ( barotropicForcingOnEdgeZonal_bc(nEdgesSolve_bc),&
@@ -262,8 +262,8 @@ contains
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
 
        ! allocate edge-based meridional and zonal component arrays
        allocate ( barotropicForcingOnEdgeZonal_btr(nEdgesSolve_btr),&
@@ -689,8 +689,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
 
         ! get barotropicForcing from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
@@ -708,10 +708,10 @@ contains
                               barotropicForcingMeridional_bc)
 
         ! pack buffers for iMOAB
-        do iCell = 1,nCellsSolve_bc
-            bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
-            bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
-        enddo
+        !do iCell = 1,nCellsSolve_bc
+        !    bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
+        !    bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
+        !enddo
 
         ! assign data to baroclinic mesh on compute processor 
         if (bcComm .ne. MPI_COMM_NULL) then
@@ -793,8 +793,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
 
         ! get connectivity/etc.
@@ -821,8 +821,8 @@ contains
 
         ! unpack buffers
         do iCell = 1,nCellsSolve_btr
-            barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
-            barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
+            !barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
+            !barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
             !
 !            barotropicForcingZonal_btr(iCell)=barotropicForcingZonal_bc(iCell)
 !            barotropicForcingMeridional_btr(iCell)=barotropicForcingMeridional_bc(iCell)
@@ -948,8 +948,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -968,10 +968,10 @@ contains
                               barotropicThicknessFluxMeridional_btr)
 
         ! pack buffers
-        do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        enddo
+        !do iCell = 1,nCellsSolve_btr
+        !    btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
+        !    btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
+        !enddo
 
         ! assign data to barotropic mesh on compute processor
         if (btrComm .ne. MPI_COMM_NULL) then
@@ -1047,8 +1047,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -1070,8 +1070,8 @@ contains
 
         ! unpack buffers
         do iCell = 1,nCellsSolve_bc
-            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
+         !   barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
+         !   barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
             !
 !            barotropicThicknessFluxZonal_bc(iCell)=barotropicThicknessFluxZonal_btr(iCell)
 !            barotropicThicknessFluxMeridional_bc(iCell)=barotropicThicknessFluxMeridional_btr(iCell)
@@ -1344,12 +1344,6 @@ contains
 
         block_ptr => block_ptr % next
     enddo
-    write(6,*) ""
-    write(6,*) ""
-    write(6,*) "put sshNew_btr=sshCur_bc"
-    write(6,*) ""
-    write(6,*) ""
-
 !-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_time_int_split_setup_btr !}}}
