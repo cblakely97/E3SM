@@ -205,7 +205,6 @@ module ocn_time_integration_split
          wctEdge,          &! flux water column thickness at edge
          baroclinicThickness,&
          baroclinicThickness_bc,& ! for storing baroclinic thicknesses during spatial-split subcycling
-         sshNew_bc,&
          sshCur_bc,&
          normalBarotropicVelocityNew_btr
 
@@ -342,10 +341,6 @@ module ocn_time_integration_split
 
         ! initialize split-explicit variables for first iteration
         call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain)
-
-        ! we need a temporary array to store the baroclinic thicknesses on the baroclinic domain
-        ! during the barotropic subcycling
-        allocate(baroclinicThickness_bc(nEdgesAll+1))
 
       endif
 
@@ -871,9 +866,8 @@ module ocn_time_integration_split
 
          if (config_spatial_mode_splitting) then
 
-           allocate( sshNew_bc(nCellsAll), sshCur_bc(nCellsAll) )
+           allocate( sshCur_bc(nCellsAll) )
            do iCell = 1,nCellsAll
-              sshNew_bc(iCell)=sshNew(iCell)
               sshCur_bc(iCell)=sshCur(iCell)
            enddo
 
@@ -896,33 +890,29 @@ module ocn_time_integration_split
 
            ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
            ! spatial-split barotropic subcycling
+           allocate(baroclinicThickness_bc(nEdgesAll+1))
+
            baroclinicThickness_bc(:)=0d0
            do iEdge=1,nEdgesAll
               baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
            enddo
 
            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
-!           deallocate(baroclinicThickness)
-!           allocate(baroclinicThickness(nEdgesAll+1))
-!           baroclinicThickness(:)=0d0
-!           do iEdge=1,nEdgesAll
-!              if (maxLevelEdgeTop(iEdge)==0) cycle
-!              cell1 = cellsOnEdge(1,iEdge)
-!              cell2 = cellsOnEdge(2,iEdge)
-!              baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
-!           enddo
-
-           ! TEMP: just carry the values over directly
+           deallocate(baroclinicThickness)
+           allocate(baroclinicThickness(nEdgesAll+1))
+           baroclinicThickness(:)=0d0
            do iEdge=1,nEdgesAll
-              baroclinicThickness(iEdge)=baroclinicThickness_bc(iEdge)
+              if (maxLevelEdgeTop(iEdge)==0) cycle
+              cell1 = cellsOnEdge(1,iEdge)
+              cell2 = cellsOnEdge(2,iEdge)
+              baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
            enddo
 
            !
            do iCell = 1,nCellsAll
-              sshNew(iCell)=sshNew_bc(iCell)
               sshCur(iCell)=sshCur_bc(iCell)
            enddo
-           deallocate(sshNew_bc, sshCur_bc)
+           deallocate(sshCur_bc)
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1256,8 +1246,25 @@ module ocn_time_integration_split
                end do
                !$omp end do
                !$omp end parallel
-               call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
-                         baroclinicThickness, wctEdge)
+
+               ! Calculate the water column thickness at the edge.
+               !
+               ! NOTE: In regular mpas-o, the water column thickness is calculated as the sum of the
+               ! vertical layers minus the sea surface height at the start of the barotropic
+               ! subcycle plus the sea surface height of the current subcycle. This roundabout
+               ! method of calculating the bathymetric depth plus sea surface height has been left
+               ! alone in regular split-explicit mpas-o. However, in order to eliminate the need
+               ! to remap sea surface heights when using spatially-split mode, the
+               ! baroclinicThickness on the barotropic domain is populated with the bathymetric
+               ! depth across each edge and we simply add the sea surface height of the current
+               ! subcycle.
+               if (config_spatial_mode_splitting) then
+                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshSubcycleCur, &
+                            baroclinicThickness, wctEdge)
+               else
+                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+                            baroclinicThickness, wctEdge)
+               endif
 
                !$omp parallel
                !$omp do schedule(runtime) &
@@ -1756,6 +1763,12 @@ module ocn_time_integration_split
                                                            normalBarotropicVelocityCur,&
                                                            normalBarotropicVelocityNew,&
                                                            sshTend)
+
+              ! reassign baroclinicThickness
+              deallocate(baroclinicThickness)
+              allocate(baroclinicThickness(nEdgesAll+1))
+              baroclinicThickness(:)=baroclinicThickness_bc(:)
+              deallocate(baroclinicThickness_bc)
 
               ! TEMP: carry over normalBarotropicVelocity
               do iEdge = 1,nEdgesAll
