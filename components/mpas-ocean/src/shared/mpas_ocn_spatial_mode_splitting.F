@@ -752,6 +752,7 @@ contains
         ! do remapping on coupler
         if (cplComm .ne. MPI_COMM_NULL) then
            ierr = iMOAB_ApplyScalarProjectionWeights(bc2btrPID,&
+                                                     0,&
                                                      bc2btr_weights_identifier,&
                                                      bc2btrFields,&
                                                      bc2btrFields_btr)
@@ -1012,6 +1013,7 @@ contains
         ! do remapping
         if (cplComm .ne. MPI_COMM_NULL) then
            ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
+                                                     0,&
                                                      btr2bc_weights_identifier,&
                                                      btr2bcFields_btr,&
                                                      btr2bcFields)

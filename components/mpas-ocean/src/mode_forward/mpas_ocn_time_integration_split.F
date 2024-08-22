@@ -205,7 +205,7 @@ module ocn_time_integration_split
          wctEdge,          &! flux water column thickness at edge
          baroclinicThickness,&
          baroclinicThickness_bc,& ! for storing baroclinic thicknesses during spatial-split subcycling
-         sshCur_bc,&
+         sshNew_bc,&
          normalBarotropicVelocityNew_btr
 
       ! State Array Pointers
@@ -866,9 +866,9 @@ module ocn_time_integration_split
 
          if (config_spatial_mode_splitting) then
 
-           allocate( sshCur_bc(nCellsAll) )
+           allocate( sshNew_bc(nCellsAll) )
            do iCell = 1,nCellsAll
-              sshCur_bc(iCell)=sshCur(iCell)
+              sshNew_bc(iCell)=sshNew(iCell)
            enddo
 
            ! TODO: move this inside one subroutine
@@ -902,17 +902,18 @@ module ocn_time_integration_split
            allocate(baroclinicThickness(nEdgesAll+1))
            baroclinicThickness(:)=0d0
            do iEdge=1,nEdgesAll
-              if (maxLevelEdgeTop(iEdge)==0) cycle
               cell1 = cellsOnEdge(1,iEdge)
               cell2 = cellsOnEdge(2,iEdge)
               baroclinicThickness(iEdge) = 0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
+              ! try using minimum of the depths?
+              baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
            enddo
 
            !
            do iCell = 1,nCellsAll
-              sshCur(iCell)=sshCur_bc(iCell)
+              sshNew(iCell)=sshNew_bc(iCell)
            enddo
-           deallocate(sshCur_bc)
+           deallocate(sshNew_bc)
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -997,7 +998,7 @@ module ocn_time_integration_split
             !$omp do schedule(runtime)
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
-               sshSubcycleCur(iCell) = sshCur(iCell)
+               sshSubcycleCur(iCell) = sshNew(iCell)
             end do
             !$omp end do
 
