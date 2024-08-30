@@ -922,7 +922,7 @@ module ocn_time_integration_split
             !$omp do schedule(runtime)
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
-               sshSubcycleCur(iCell) = sshCur(iCell)
+               sshSubcycleCur(iCell) = sshNew(iCell)
             end do
             !$omp end do
 
