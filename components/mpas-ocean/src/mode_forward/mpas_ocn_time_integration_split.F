@@ -1634,8 +1634,7 @@ module ocn_time_integration_split
             !$omp parallel
             !$omp do schedule(runtime)
             do iEdge = 1, nEdges
-               uTemp(:,iEdge) = normalBarotropicVelocityNew(iEdge) &
-                            + normalBaroclinicVelocityNew(:,iEdge)
+               uTemp(:,iEdge) = normalBaroclinicVelocityNew(:,iEdge)
             end do
             !$omp end do
             !$omp end parallel
@@ -1650,7 +1649,6 @@ module ocn_time_integration_split
             do iEdge = 1, nEdges
                do k = 1, nVertLevels
                   normalTransportVelocity(k,iEdge) =  &
-                             normalBarotropicVelocityNew(iEdge)   + &
                              normalBaroclinicVelocityNew(k,iEdge)
                end do
             end do
@@ -1705,6 +1703,10 @@ module ocn_time_integration_split
                normalVelocityCorrection = useVelocityCorrection* &
                              ((barotropicThicknessFlux(iEdge) - &
                                normalThicknessFluxSum)/thicknessSum)
+
+               ! Because of reformulation, the "barotropic velocity" is now equal to the total
+               ! velocity correction
+               normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
 
                do k = 1, nVertLevels
 
