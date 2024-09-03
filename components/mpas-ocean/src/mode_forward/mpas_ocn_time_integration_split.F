@@ -204,9 +204,7 @@ module ocn_time_integration_split
          deltaSSH,         &
          wctEdge,          &! flux water column thickness at edge
          baroclinicThickness,&
-         baroclinicThickness_bc,& ! for storing baroclinic thicknesses during spatial-split subcycling
-         sshNew_bc,&
-         normalBarotropicVelocityNew_btr
+         baroclinicThickness_bc ! for storing baroclinic thicknesses during spatial-split subcycling
 
       ! State Array Pointers
       real (kind=RKIND), dimension(:), pointer :: &
@@ -865,12 +863,6 @@ module ocn_time_integration_split
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
          if (config_spatial_mode_splitting) then
-
-           allocate( sshNew_bc(nCellsAll) )
-           do iCell = 1,nCellsAll
-              sshNew_bc(iCell)=sshNew(iCell)
-           enddo
-
            ! TODO: move this inside one subroutine
 
            ! remap barotropicForcing
@@ -910,11 +902,6 @@ module ocn_time_integration_split
               baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
            enddo
 
-           !
-           do iCell = 1,nCellsAll
-              sshNew(iCell)=sshNew_bc(iCell)
-           enddo
-           deallocate(sshNew_bc)
          endif
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1568,9 +1555,13 @@ module ocn_time_integration_split
                   !$omp end do
                   !$omp end parallel
 
-                  ! TODO: add conditional if we are using spatial mode splitting
-                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
-                         baroclinicThickness, wctEdge)
+                  if (config_spatial_mode_splitting) then
+                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshTemp, &
+                               baroclinicThickness, wctEdge)
+                  else
+                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+                               baroclinicThickness, wctEdge)
+                  endif
 
                   !$omp parallel
                   !$omp do schedule(runtime) &
@@ -1611,15 +1602,20 @@ module ocn_time_integration_split
                   !$omp end do
                   !$omp end parallel
 
-                  ! TODO: add conditional if we are using spatial mode splitting
-                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
-                         baroclinicThickness, wctEdge)
+                  if (config_spatial_mode_splitting) then
+!                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshTemp, &
+!                               baroclinicThickness, wctEdge)
+                  else
+                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+                               baroclinicThickness, wctEdge)
+                  endif
 
                   ! compute barotropic thickness flux on edges
                   !$omp parallel
                   !$omp do schedule(runtime) &
                   !$omp private(flux)
                   do iEdge = 1, nEdges
+                     if (maxLevelEdgeTop(iEdge).eq.0) cycle
 
                      flux = btrvel_temp(iEdge) * wctEdge(iEdge)
 
@@ -1731,6 +1727,19 @@ module ocn_time_integration_split
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             if (config_spatial_mode_splitting) then
+              ! set ssh on barotropic domain. If we are iterating, set
+              ! sshNew=0.5*(sshNew+sshSubcycleNew). If we are not
+              ! iterating simply set sshNew=sshSubcycleNew. This *should* be consistent with the
+              ! layer thicknesses we will calculate on the baroclinic domain.
+              if (splitExplicitStep < numTSIterations) then
+                 do iCell = 1,nCellsAll
+                    sshNew(iCell)=0.5d0*(sshNew(iCell)+sshSubcycleNew(iCell))
+                 end do
+              else
+                 do iCell = 1,nCellsAll
+                    sshNew(iCell)=sshSubcycleNew(iCell)
+                 end do
+              endif
 
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
