@@ -1506,8 +1506,8 @@ module ocn_time_integration_split
                   !$omp end do
                   !$omp end parallel
 
-                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
-                         baroclinicThickness, wctEdge)
+!                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+!                         baroclinicThickness, wctEdge)
 
                   ! compute barotropic thickness flux on edges
                   !$omp parallel
