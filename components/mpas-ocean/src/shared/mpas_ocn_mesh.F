@@ -1611,6 +1611,11 @@ contains
       ! Check consistency and validity of options
       !-----------------------------------------------------------------
 
+      ! do not perform checks on barotropic domain
+!      if ( domain % domainID .eq. 1 ) then
+!         return
+!      endif
+
       ! SSH consistency
       if (config_check_ssh_consistency) then
 

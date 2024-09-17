@@ -222,8 +222,8 @@ contains
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
-       call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
        ! allocate edge-based meridional and zonal component arrays
        allocate ( barotropicForcingOnEdgeZonal_bc(nEdgesSolve_bc),&
@@ -262,8 +262,8 @@ contains
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-       call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
-       call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
 
        ! allocate edge-based meridional and zonal component arrays
        allocate ( barotropicForcingOnEdgeZonal_btr(nEdgesSolve_btr),&
@@ -458,7 +458,7 @@ contains
        call errorout(ierr, "falied to compute weights for baroclinic to barotropic remapping")
 
        ! for fine to coarse (barotropic to baroclinic) use conservative
-       fv_method = ''//C_NULL_CHAR ! not sure what this is for, figure it out later
+       fv_method = 'bilin'//C_NULL_CHAR ! not sure what this is for, figure it out later
 
        ! barotropic => baroclinic
        ierr = iMOAB_ComputeScalarProjectionWeights(btr2bcPID, &
@@ -689,8 +689,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
         ! get barotropicForcing from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
@@ -698,6 +698,10 @@ contains
                                  barotropicForcingZonal_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
                                  barotropicForcingMeridional_bc)
+
+        ! exchange halos for barotropicForcing
+        ! TODO: test if this is actually necessary
+         call mpas_dmpar_field_halo_exch(domain,'barotropicForcing')
 
         ! reconstruct from edge based to cell-centered quantities
         call mpas_reconstruct(meshPool, barotropicForcing_bc, &
@@ -707,11 +711,16 @@ contains
                               barotropicForcingZonal_bc, &
                               barotropicForcingMeridional_bc)
 
+        ! exchange halos for barotropicForcing
+        ! TODO: test if this is actually necessary
+         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingMeridional')
+         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingZonal')
+
         ! pack buffers for iMOAB
-        !do iCell = 1,nCellsSolve_bc
-        !    bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
-        !    bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
-        !enddo
+        do iCell = 1,nCellsSolve_bc
+            bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
+            bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
+        enddo
 
         ! assign data to baroclinic mesh on compute processor 
         if (bcComm .ne. MPI_COMM_NULL) then
@@ -794,8 +803,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
 
         ! get connectivity/etc.
@@ -822,11 +831,8 @@ contains
 
         ! unpack buffers
         do iCell = 1,nCellsSolve_btr
-            !barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
-            !barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
-            !
-!            barotropicForcingZonal_btr(iCell)=barotropicForcingZonal_bc(iCell)
-!            barotropicForcingMeridional_btr(iCell)=barotropicForcingMeridional_bc(iCell)
+           barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
+           barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
         enddo
 
         ! perform halo exchange
@@ -851,8 +857,6 @@ contains
             barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
                           cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
                           sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
-           ! carry over edge-based values
-           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
          enddo
 
         block_ptr => block_ptr % next
@@ -899,7 +903,8 @@ contains
 
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
-                        nEdgesSolve_bc, nEdgesSolve_btr
+                        nEdgesSolve_bc, nEdgesSolve_btr,&
+                        nEdgesAll_bc, nEdgesAll_btr
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
@@ -949,8 +954,8 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -960,6 +965,12 @@ contains
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
                                  barotropicThicknessFluxMeridional_btr)
 
+        ! exchange halos for barotropicThicknessFlux
+        ! TODO: test if this is actually necessary
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
+
         ! reconstruct from edge based to cell-centered quantities
         call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
                               barotropicThicknessFluxX_btr,&
@@ -967,12 +978,14 @@ contains
                               barotropicThicknessFluxZ_btr,&
                               barotropicThicknessFluxZonal_btr,&
                               barotropicThicknessFluxMeridional_btr)
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
 
         ! pack buffers
-        !do iCell = 1,nCellsSolve_btr
-        !    btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-        !    btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        !enddo
+        do iCell = 1,nCellsSolve_btr
+            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
+            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
+        enddo
 
         ! assign data to barotropic mesh on compute processor
         if (btrComm .ne. MPI_COMM_NULL) then
@@ -1049,8 +1062,9 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_bc)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -1072,11 +1086,8 @@ contains
 
         ! unpack buffers
         do iCell = 1,nCellsSolve_bc
-         !   barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-         !   barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-            !
-!            barotropicThicknessFluxZonal_bc(iCell)=barotropicThicknessFluxZonal_btr(iCell)
-!            barotropicThicknessFluxMeridional_bc(iCell)=barotropicThicknessFluxMeridional_btr(iCell)
+            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
+            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
         enddo
 
         ! exchange halos
@@ -1095,8 +1106,10 @@ contains
            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
                                             cos(angleEdge_bc(iEdge))*zonal_edge + &
                                             sin(angleEdge_bc(iEdge))*meridional_edge
-          ! direct carry over
-          barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
+        enddo
+
+        do iEdge = 1,nEdgesAll_bc
+           barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
         enddo
         block_ptr => block_ptr % next
     enddo
