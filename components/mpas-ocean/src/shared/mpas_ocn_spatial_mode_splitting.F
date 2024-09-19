@@ -1283,7 +1283,7 @@ contains
     type(mpas_pool_type), pointer :: meshPool, statePool
 
     ! meshPool
-    integer, pointer :: nCellsSolve
+    integer, pointer :: nCellsAll_btr
     
     ! statePool
     real (kind=RKIND), pointer, dimension(:) :: sshCur_btr,&
@@ -1292,31 +1292,11 @@ contains
     ! loop indices
     integer :: iCell
 
-    ! TEMP: for debugging we are just carrying stuff over
-    real (kind=RKIND), pointer, dimension(:) :: sshCur_bc
-
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
-    ! TEMP: get sshCur_bc
     block_ptr => domain % blocklist
-    do while(associated(block_ptr))
-
-       ! get sshCur from baroclinic domain
-        ! setup pools
-        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
-
-        ! get nCells and sea surface heights
-        call mpas_pool_get_array(statePool, 'ssh', sshCur_bc, 1)
-
-        block_ptr => block_ptr % next
-    enddo
-    !end TEMP
-
-    ! TEMP: changed to domain % next cuz we needed bc domain too
-    block_ptr => domain % next % blocklist
-    ! end TEMP
     do while(associated(block_ptr))
 
         ! setup pools
@@ -1324,17 +1304,11 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get nCells and sea surface heights
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_btr)
         call mpas_pool_get_array(statePool, 'ssh', sshCur_btr, 1)
         call mpas_pool_get_array(statePool, 'ssh', sshNew_btr, 2)
 
-        ! TEMP: put sshCur_bc into sshCur_btr
-        do iCell = 1,nCellsSolve
-           sshCur_btr(iCell) = sshCur_bc(iCell)
-        enddo
-        ! end TEMP
-
-        do iCell = 1, nCellsSolve
+        do iCell = 1, nCellsAll_btr
            sshNew_btr(iCell) = sshCur_btr(iCell)
         enddo
 

@@ -338,7 +338,7 @@ module ocn_time_integration_split
         domain_btr => domain % next
 
         ! initialize split-explicit variables for first iteration
-        call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain)
+        call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain_btr)
 
       endif
 
@@ -632,6 +632,10 @@ module ocn_time_integration_split
 
          stage1_tend_time = min(splitExplicitStep,2)
 
+         ! CPB NOTE: This is where we grab $\boldsymbol{u_k^*}$ (full velocity). Note that the
+         ! stage1_tend_time will grab the first time level on the initial loop through and the "new"
+         ! on subsequent loops. This is what we want since the reset variable is stored in the
+         ! second time level of normalVelocity (around line 2182)
          call mpas_pool_get_array(statePool, 'normalVelocity', &
                            normalVelocityCur, stage1_tend_time)
 
@@ -736,7 +740,8 @@ module ocn_time_integration_split
             !$acc exit data delete(highFreqThicknessCur, highFreqThicknessTend)
          endif
 #endif
-
+         ! CPB NOTE: This is where the velocity tendency is calculated. After this call we no longer
+         ! need the total velocity ($\boldsymbol{u_k^*}$)
          call ocn_tend_vel(domain, tendPool, statePool, forcingPool, &
                            stage1_tend_time, domain % dminfo, dt)
 
@@ -778,7 +783,7 @@ module ocn_time_integration_split
                   ! normalBaroclinicVelocityOld +
                   !                dt*(-f*normalBaroclinicVelocityPerp
                   !                    + T(u*,w*,p*) + g*grad(SSH*) )
-                  ! Here uNew is a work variable containing
+                  ! Here normalVelocityNew is a work variable containing
                   !  -fEdge(iEdge)*normalBaroclinicVelocityPerp(k,iEdge)
                   uTemp(k,iEdge) = normalBaroclinicVelocityCur(k,iEdge) &
                            + dt * (normalVelocityTend(k,iEdge) &
@@ -832,7 +837,7 @@ module ocn_time_integration_split
                   baroclinicThickness(iEdge) = baroclinicThickness(iEdge) + &
                                  layerThickEdgeFlux(k,iEdge)
                enddo
-            enddo ! iEdge
+            enddo ! iEdgeh
             !$omp end do
             !$omp end parallel
 
@@ -865,6 +870,15 @@ module ocn_time_integration_split
          if (config_spatial_mode_splitting) then
            ! TODO: move this inside one subroutine
 
+           ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
+           ! spatial-split barotropic subcycling
+           allocate(baroclinicThickness_bc(nEdgesAll+1))
+
+           baroclinicThickness_bc(:)=0d0
+           do iEdge=1,nEdgesAll
+              baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
+           enddo
+
            ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
@@ -879,15 +893,6 @@ module ocn_time_integration_split
                                                         normalBarotropicVelocityCur,&
                                                         normalBarotropicVelocityNew,&
                                                         sshTend)
-
-           ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
-           ! spatial-split barotropic subcycling
-           allocate(baroclinicThickness_bc(nEdgesAll+1))
-
-           baroclinicThickness_bc(:)=0d0
-           do iEdge=1,nEdgesAll
-              baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
-           enddo
 
            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
            deallocate(baroclinicThickness)
@@ -986,7 +991,8 @@ module ocn_time_integration_split
             !$omp do schedule(runtime)
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
-               sshSubcycleCur(iCell) = sshNew(iCell)
+               !sshSubcycleCur(iCell) = sshNew(iCell)
+               sshSubcycleCur(iCell)=sshCur(iCell)
             end do
             !$omp end do
 
@@ -1728,18 +1734,23 @@ module ocn_time_integration_split
 
             if (config_spatial_mode_splitting) then
               ! set ssh on barotropic domain. If we are iterating, set
-              ! sshNew=0.5*(sshNew+sshSubcycleNew). If we are not
+              ! sshNew=0.5*(sshCur+sshSubcycleNew). If we are not
               ! iterating simply set sshNew=sshSubcycleNew. This *should* be consistent with the
               ! layer thicknesses we will calculate on the baroclinic domain.
               if (splitExplicitStep < numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshNew(iCell)=0.5d0*(sshNew(iCell)+sshSubcycleNew(iCell))
+                    sshNew(iCell)=0.5d0*(sshCur(iCell)+sshSubcycleNew(iCell))
                  end do
               else
                  do iCell = 1,nCellsAll
                     sshNew(iCell)=sshSubcycleNew(iCell)
                  end do
               endif
+
+              ! initialize normalBarotropicVelocity on the barotropic domain
+              !do iEdge = 1,nEdgesAll
+              !  normalBarotropicVelocityCur(iEdge)=normalBarotropicVelocityNew(iEdge)
+              !enddo
 
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
