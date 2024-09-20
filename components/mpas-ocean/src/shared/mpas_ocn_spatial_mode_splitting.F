@@ -639,7 +639,7 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_btr
+                        vertexDegree_btr, nEdgesAll_btr
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
                                                 barotropicForcing_btr,&
@@ -857,6 +857,10 @@ contains
             barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
                           cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
                           sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
+         enddo
+
+         do iEdge = 1,nEdgesAll_btr
+            barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
          enddo
 
         block_ptr => block_ptr % next
