@@ -859,6 +859,8 @@ contains
                           sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
          enddo
 
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
+
         block_ptr => block_ptr % next
     enddo
 #endif
