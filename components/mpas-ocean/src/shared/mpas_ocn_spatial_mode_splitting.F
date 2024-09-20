@@ -859,10 +859,6 @@ contains
                           sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
          enddo
 
-         do iEdge = 1,nEdgesAll_btr
-            barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
-         enddo
-
         block_ptr => block_ptr % next
     enddo
 #endif
