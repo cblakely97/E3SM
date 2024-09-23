@@ -867,6 +867,7 @@ contains
 
         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
 
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
         do iEdge = 1,nEdgesAll_btr
            barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
         enddo
