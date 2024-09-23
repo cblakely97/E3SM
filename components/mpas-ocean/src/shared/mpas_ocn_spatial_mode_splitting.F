@@ -629,17 +629,21 @@ contains
     !-----------------------------------------------------------------
     ! domain pointer for barotropic domain
     type (domain_type), pointer :: domain_btr
+
     ! configuration info
     logical, pointer :: config_spatial_mode_splitting
-    ! 
+
+    ! pools
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     type (mpas_pool_type), pointer :: statePool
+
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
                         vertexDegree_btr, nEdgesAll_btr
+
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
                                                 barotropicForcing_btr,&
@@ -647,6 +651,7 @@ contains
                                                 barotropicForcingZonal_btr,&
                                                 barotropicForcingMeridional_bc,&
                                                 barotropicForcingMeridional_btr
+
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
@@ -655,6 +660,7 @@ contains
                                         verticesOnEdge_btr,&
                                         cellsOnVertex_btr
     real (kind=RKIND), dimension(:,:), pointer :: kiteAreasOnVertex_btr
+
     ! looping variables
     integer :: iCell, iEdge
     ! error handling
@@ -852,14 +858,18 @@ contains
                                                 barotropicForcingOnEdgeMeridional_btr)
 
         ! put back into edge based arrays
-         barotropicForcing_btr(:) = 0_RKIND
-         do iEdge = 1,nEdgesSolve_btr
-            barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
-                          cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
-                          sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
-         enddo
+        barotropicForcing_btr(:) = 0_RKIND
+        do iEdge = 1,nEdgesSolve_btr
+           barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
+                         cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
+                         sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
+        enddo
 
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
+        call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
+
+        do iEdge = 1,nEdgesAll_btr
+           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
+        enddo
 
         block_ptr => block_ptr % next
     enddo
@@ -906,7 +916,7 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        nEdgesAll_bc, nEdgesAll_btr
+                        vertexDegree_bc, nEdgesAll_bc
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
@@ -920,7 +930,10 @@ contains
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
     real (kind=RKIND), dimension(:), pointer :: angleEdge_bc
-    integer, dimension(:,:), pointer :: cellsOnEdge_bc
+    integer, dimension(:,:), pointer :: cellsOnEdge_bc,&
+                                        verticesOnEdge_bc,&
+                                        cellsOnVertex_bc
+    real (kind=RKIND), dimension(:,:), pointer :: kiteAreasOnVertex_bc
 
     ! looping variables
     integer :: iCell, iEdge
@@ -1066,7 +1079,15 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshpool, 'vertexDegree', vertexDegree_bc)
         call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_bc)
+
+        ! get connectivity/etc.
+        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
+        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
+        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_bc)
+        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_bc)
+        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_bc)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -1075,8 +1096,6 @@ contains
                                  barotropicThicknessFluxZonal_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
                                  barotropicThicknessFluxMeridional_bc)
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
 
         ! get remapped data from iMOAB
         ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
@@ -1096,23 +1115,32 @@ contains
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
 
+        ! reconstruct cell based zonal and meridional components to edge-based zonal and meridional
+        ! components
+        call mpas_vector_cell_to_edge_isotropic(barotropicThicknessFluxZonal_bc,&
+                                                barotropicThicknessFluxMeridional_bc,&
+                                                nEdgesSolve_bc,&
+                                                vertexDegree_bc,&
+                                                verticesOnEdge_bc,&
+                                                cellsOnVertex_bc,&
+                                                kiteAreasOnVertex_bc,&
+                                                barotropicThicknessFluxOnEdgeZonal_bc,&
+                                                barotropicThicknessFluxOnEdgeMeridional_bc)
+
         ! put into edge-based arrays
         barotropicThicknessFlux_bc(:)=0_RKIND
         do iEdge = 1,nEdgesSolve_bc
-           cell1 = cellsOnEdge_bc(1, iEdge)
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           zonal_edge = 0.5_RKIND * (barotropicThicknessFluxZonal_bc(cell1) + &
-                                 barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5_RKIND * (barotropicThicknessFluxMeridional_bc(cell1) + &
-                                      barotropicThicknessFluxMeridional_bc(cell2))
-           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-                                            sin(angleEdge_bc(iEdge))*meridional_edge
+            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
+                          cos(angleEdge_bc(iEdge))*barotropicThicknessFluxOnEdgeZonal_bc(iEdge) + &
+                          sin(angleEdge_bc(iEdge))*barotropicThicknessFluxOnEdgeMeridional_bc(iEdge)
         enddo
 
-        do iEdge = 1,nEdgesAll_bc
-           barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
-        enddo
+         call mpas_dmpar_field_halo_exch(domain,'barotropicThicknessFLux')
+
+        !do iEdge = 1,nEdgesAll_bc
+        !   barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
+        !enddo
+
         block_ptr => block_ptr % next
     enddo
 #endif
