@@ -188,6 +188,9 @@ contains
     integer :: partScheme = 0 ! trivial partitioner
     integer :: context_id
 
+    ! pointers for remapping bathymetry
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_btr, bottomDepth_bc
+
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
@@ -437,7 +440,7 @@ contains
     if (cplComm .ne. MPI_COMM_NULL) then
 
        ! for coarse to fine (baroclinic to barotropic) use bilinear
-       fv_method = 'bilin'//C_NULL_CHAR ! not sure what this is for, figure it out later
+       fv_method = ''//C_NULL_CHAR ! not sure what this is for, figure it out later
 
        ! baroclinic => barotropic
        ierr = iMOAB_ComputeScalarProjectionWeights(bc2btrPID, &
@@ -458,7 +461,7 @@ contains
        call errorout(ierr, "falied to compute weights for baroclinic to barotropic remapping")
 
        ! for fine to coarse (barotropic to baroclinic) use conservative
-       fv_method = 'bilin'//C_NULL_CHAR ! not sure what this is for, figure it out later
+       fv_method = ''//C_NULL_CHAR
 
        ! barotropic => baroclinic
        ierr = iMOAB_ComputeScalarProjectionWeights(btr2bcPID, &
@@ -591,6 +594,10 @@ contains
     allocate ( bc2btrVar_btr(2*nelem(3)), btr2bcVar_btr(2*nelem(3)) )
     bc2btrVar_btr(:) = 0d0
     btr2bcVar_btr(:) = 0d0
+
+    ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
+    ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
+    ! tags that will only be used once
 #endif
     !--------------------------------------------------------------------
 
@@ -642,7 +649,8 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_btr, nEdgesAll_btr
+                        vertexDegree_btr, nEdgesAll_btr,&
+                        nCellsAll_btr
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
@@ -845,31 +853,33 @@ contains
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
 
-        ! reconstruct cell based zonal and meridional components to edge-based zonal and meridional
-        ! components
-        call mpas_vector_cell_to_edge_isotropic(barotropicForcingZonal_btr,&
-                                                barotropicForcingMeridional_btr,&
-                                                nEdgesSolve_btr,&
-                                                vertexDegree_btr,&
-                                                verticesOnEdge_btr,&
-                                                cellsOnVertex_btr,&
-                                                kiteAreasOnVertex_btr,&
-                                                barotropicForcingOnEdgeZonal_btr,&
-                                                barotropicForcingOnEdgeMeridional_btr)
-
         ! put back into edge based arrays
-        barotropicForcing_btr(:) = 0_RKIND
+        barotropicForcing_btr(:) = 0d0
         do iEdge = 1,nEdgesSolve_btr
-           barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
-                         cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
-                         sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
+            cell1 = cellsOnEdge_btr(1, iEdge)
+            cell2 = cellsOnEdge_btr(2, iEdge)
+            zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
+                                  barotropicForcingZonal_btr(cell2))
+            meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
+                                       barotropicForcingMeridional_btr(cell2))
+            barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
+                                           cos(angleEdge_btr(iEdge))*zonal_edge + &
+                                           sin(angleEdge_btr(iEdge))*meridional_edge
         enddo
 
         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
 
         call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_btr)
         do iEdge = 1,nEdgesAll_btr
-           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
+           cell1=cellsOnEdge_btr(1,iEdge)
+           cell2=cellsOnEdge_btr(2,iEdge)
+           if (cell1.lt.1.OR.cell1.gt.nCellsAll_btr) then
+              barotropicForcing_btr(iEdge)=0d0
+           elseif (cell2.lt.1.OR.cell2.gt.nCellsAll_btr) then
+              barotropicForcing_btr(iEdge)=0d0
+           endif
+!!           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
         enddo
 
         block_ptr => block_ptr % next
@@ -917,7 +927,8 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_bc, nEdgesAll_bc
+                        vertexDegree_bc, nEdgesAll_bc,&
+                        nCellsAll_bc
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
@@ -984,8 +995,6 @@ contains
         ! exchange halos for barotropicThicknessFlux
         ! TODO: test if this is actually necessary
          call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
 
         ! reconstruct from edge based to cell-centered quantities
         call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
@@ -1081,7 +1090,6 @@ contains
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
         call mpas_pool_get_dimension(meshpool, 'vertexDegree', vertexDegree_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_bc)
 
         ! get connectivity/etc.
         call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
@@ -1116,31 +1124,21 @@ contains
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
 
-        ! reconstruct cell based zonal and meridional components to edge-based zonal and meridional
-        ! components
-        call mpas_vector_cell_to_edge_isotropic(barotropicThicknessFluxZonal_bc,&
-                                                barotropicThicknessFluxMeridional_bc,&
-                                                nEdgesSolve_bc,&
-                                                vertexDegree_bc,&
-                                                verticesOnEdge_bc,&
-                                                cellsOnVertex_bc,&
-                                                kiteAreasOnVertex_bc,&
-                                                barotropicThicknessFluxOnEdgeZonal_bc,&
-                                                barotropicThicknessFluxOnEdgeMeridional_bc)
-
         ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0_RKIND
+        barotropicThicknessFlux_bc(:)=0d0
         do iEdge = 1,nEdgesSolve_bc
-            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                          cos(angleEdge_bc(iEdge))*barotropicThicknessFluxOnEdgeZonal_bc(iEdge) + &
-                          sin(angleEdge_bc(iEdge))*barotropicThicknessFluxOnEdgeMeridional_bc(iEdge)
+           cell1 = cellsOnEdge_bc(1, iEdge)
+           cell2 = cellsOnEdge_bc(2,iEdge)
+           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
+                                 barotropicThicknessFluxZonal_bc(cell2))
+           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
+                                      barotropicThicknessFluxMeridional_bc(cell2))
+           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
+                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
+                                            sin(angleEdge_bc(iEdge))*meridional_edge
         enddo
 
-         call mpas_dmpar_field_halo_exch(domain,'barotropicThicknessFLux')
-
-        !do iEdge = 1,nEdgesAll_bc
-        !   barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
-        !enddo
+        call mpas_dmpar_field_halo_exch(domain,'barotropicThicknessFlux')
 
         block_ptr => block_ptr % next
     enddo
