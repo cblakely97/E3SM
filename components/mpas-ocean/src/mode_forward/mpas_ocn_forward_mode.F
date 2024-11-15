@@ -295,6 +295,27 @@ module ocn_forward_mode
                                      'normalBarotropicVelocitySubcycle')
          call mpas_dmpar_exch_group_build_reusable_buffers(domain, &
                                                         'subcycleFields')
+         ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
+         ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
+         ! tags that will only be used once
+         call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "about to destroy"
+         write(6,*) ""
+         write(6,*) ""
+         call ocn_meshDestroy(ierr)
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "destroyed"
+         write(6,*) ""
+         write(6,*) ""
+         call ocn_meshCreate(domain % core % domainlist)
+         write(6,*) ""
+         write(6,*) ""
+         write(6,*) "created"
+         write(6,*) ""
+         write(6,*) ""
          return
       end if
 

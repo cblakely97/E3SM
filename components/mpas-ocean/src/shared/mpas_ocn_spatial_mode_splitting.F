@@ -69,7 +69,8 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_setup_domain,&
               ocn_spatial_mode_splitting_bc2btr_remapping,&
               ocn_spatial_mode_splitting_btr2bc_remapping,&
-              ocn_spatial_mode_splitting_time_int_split_setup_btr
+              ocn_spatial_mode_splitting_time_int_split_setup_btr,&
+              ocn_spatial_mode_splitting_bottomDepth_remapping
 
     !--------------------------------------------------------------------
     !
@@ -187,9 +188,6 @@ contains
     ! iMOAB variables
     integer :: partScheme = 0 ! trivial partitioner
     integer :: context_id
-
-    ! pointers for remapping bathymetry
-    real (kind=RKIND), dimension(:), pointer :: bottomDepth_btr, bottomDepth_bc
 
     ! End preamble
     !-----------------------------------------------------------------
@@ -458,7 +456,7 @@ contains
                                                    fValidate, &
                                                    dof_tag_names, &
                                                    dof_tag_names)
-       call errorout(ierr, "falied to compute weights for baroclinic to barotropic remapping")
+       call errorout(ierr, "failed to compute weights for baroclinic to barotropic remapping")
 
        ! for fine to coarse (barotropic to baroclinic) use conservative
        fv_method = ''//C_NULL_CHAR
@@ -598,10 +596,232 @@ contains
     ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
     ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
     ! tags that will only be used once
+    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+
 #endif
     !--------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_init_moab_domain!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_bottomDepth_remap
+!
+!> \brief   Remaps bottomDepth from barotropic to baroclinic domain
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  This routine conservatively remaps bottomDepth from the barotropic 
+!>  to baroclinic domain.
+!
+!-----------------------------------------------------------------------
+
+
+    subroutine ocn_spatial_mode_splitting_bottomDepth_remapping(domain)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain ! will alwas be barotropic
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+    ! domain pointer
+    type (domain_type), pointer :: domain_bc,domain_btr
+    ! configuration info
+    logical, pointer :: config_spatial_mode_splitting
+    ! 
+    type (block_type), pointer :: block_ptr
+    type (mpas_pool_type), pointer :: meshPool
+
+    ! mesh information
+    integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
+                        nEdgesSolve_bc, nEdgesSolve_btr,&
+                        vertexDegree_bc, nEdgesAll_bc,&
+                        nCellsAll_bc
+
+    ! arrays for storing data
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc,&
+                                                bottomDepth_btr
+
+    ! looping variables
+    integer :: iCell, iEdge
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    ! get configuration to see if we are using the mode splitting, if not return
+    call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
+                              config_spatial_mode_splitting)
+    if (.not. config_spatial_mode_splitting) then
+       return
+    endif
+
+#ifdef HAVE_MOAB
+
+    ! to avoid confusion designate pointers for barotropic and baroclinic domain
+    domain_bc => domain % core % domainlist
+    domain_btr => domain_bc % next
+
+    !--------------------------------------------------------------------
+    ! get bottomDepth from barotropic domain
+    !--------------------------------------------------------------------
+
+    block_ptr => domain_btr % blocklist
+    do while(associated(block_ptr))
+
+        ! setup pools
+        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+        ! get num cells/edges
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+
+        ! get bottomDepth
+        call mpas_pool_get_array(meshPool, 'bottomDepth',&
+                                 bottomDepth_btr)
+
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "max bottom depth btr = ",maxval(bottomDepth_btr)
+        write(6,*) "min bottom depth btr = ",minval(bottomDepth_btr)
+        write(6,*) ""
+        write(6,*) ""
+
+        ! pack buffers. We simply use the first half of the buffers we already
+        ! created so that we do not need to create a one-time tag
+        do iCell = 1,nCellsSolve_btr
+            btr2bcVar_btr(iCell) = bottomDepth_btr(iCell)
+        enddo
+
+        ! assign data to barotropic mesh on compute processor
+        if (btrComm .ne. MPI_COMM_NULL) then
+
+           ! assign values to moab
+           ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
+                                            btr2bcFields_btr,&
+                                            2*nCellsSolve_btr,&
+                                            1,&
+                                            btr2bcVar_btr)
+           call errorout(ierr,"failed to assign bottom depth to barotropic mesh")
+
+           ! send element tag
+           ierr = iMOAB_SendElementTag(cmpbtrPID,&
+                                       btr2bcFields_btr,&
+                                       btrCouComm,&
+                                       cplbc)
+           call errorout(ierr,"failed to send bottom depth to coupler")
+        endif
+
+        ! receive data on coupler
+        if (cplComm .ne. MPI_COMM_NULL) then
+           
+           ! receive data
+           ierr = iMOAB_ReceiveElementTag(cplbtrPID,&
+                                          btr2bcFields_btr,&
+                                          btrCouComm,&
+                                          cplbc)
+           call errorout(ierr,"failed to receive bottom depth on coupler")
+        endif
+
+        ! free send buffers
+        if (btrComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
+           call errorout(ierr,"failed to free send buffers 936")
+        endif
+
+        ! do remapping
+        if (cplComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
+                                                     0,&
+                                                     btr2bc_weights_identifier,&
+                                                     btr2bcFields_btr,&
+                                                     btr2bcFields)
+           call errorout(ierr,"failed to reproject bottom depth data to baroclinic mesh")
+
+           ! send data to cmpbc
+           ierr = iMOAB_SendElementTag(cplbcPID,&
+                                       btr2bcFields, &
+                                       bcCouComm,cmpbc)
+           call errorout(ierr,"failed to send bottom depth back to coupler")
+        endif
+
+        ! receive data from coupler on baroclinic
+        if (bcComm .ne. MPI_COMM_NULL) then
+           ierr = iMOAB_ReceiveElementTag(cmpbcPID,&
+                                          btr2bcFields,&
+                                          bcCouComm,&
+                                          cplbc)
+           call errorout(ierr,"failed to receive bottom depth back on coupler")
+        endif
+        block_ptr => block_ptr % next
+    enddo
+
+    !--------------------------------------------------------------------
+    ! remap bottomDepth to baroclinic domain
+    !--------------------------------------------------------------------
+
+    block_ptr => domain_bc % blocklist
+    do while(associated(block_ptr))
+
+        ! setup pools
+        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+        ! get num cells/edges
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+
+        ! get bottomDepth from baroclinic domain
+        call mpas_pool_get_array(meshPool, 'bottomDepth',&
+                                 bottomDepth_bc)
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "max bottom depth bc = ",maxval(bottomDepth_bc)
+        write(6,*) "min bottom depth bc = ",minval(bottomDepth_bc)
+        write(6,*) ""
+        write(6,*) ""
+
+        ! get remapped data from iMOAB
+        ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
+                                         btr2bcFields,&
+                                         2*nCellsSolve_bc,&
+                                         1,&
+                                         btr2bcVar)
+        call errorout(ierr,"failed to get bottomDepth_bc from iMOAB")
+
+        ! unpack buffers
+        do iCell = 1,nCellsSolve_bc
+            bottomDepth_bc(iCell) = btr2bcVar(iCell)
+        enddo
+
+        ! exchange halos
+        call mpas_dmpar_field_halo_exch(domain, 'bottomDepth')
+
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "max bottom depth bc = ",maxval(bottomDepth_bc)
+        write(6,*) "min bottom depth bc = ",minval(bottomDepth_bc)
+        write(6,*) ""
+        write(6,*) ""
+
+        block_ptr => block_ptr % next
+    enddo
+
+    ! re-initialize the baroclinic mesh to update the vertical levels to match our new bathymetry
+    !call ocn_meshDestroy(ierr)
+    !call ocn_meshCreate(domain_bc)
+
+#endif
+    end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
 
 !***********************************************************************
 !

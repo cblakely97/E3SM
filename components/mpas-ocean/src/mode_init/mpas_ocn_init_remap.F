@@ -231,6 +231,10 @@ contains
 
     call ocn_spatial_mode_splitting_init_moab_domain(domain)
     call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
+    ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
+    ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
+    ! tags that will only be used once
+    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
 
     !--------------------------------------------------------------------
     ! baroclinic => barotropic
