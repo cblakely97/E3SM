@@ -80,33 +80,29 @@ module ocn_spatial_mode_splitting
 
     ! mpi groups/comms. All of these span the same processors
     integer :: bcComm, btrComm
-    integer :: cplComm, bcCouComm, btrCouComm   ! coupler comms
-    integer :: bcGroup, btrGroup, cplGroup      ! groups
+    integer :: bcGroup, btrGroup
    
     ! identifiers for moab meshes
-    ! id's on compute core 
-    integer :: cmpbc    = 314
-    integer :: cmpbtr   = 315
-    integer :: bc2btrid = 416
-    integer :: btr2bcid = 417
+    ! barotropic mesh identifiers
+    integer :: btrOnBtr    = 314
+    integer :: btrOnBc     = 315
+    integer :: btrXbcOnBc  = 316
 
-    ! id's on coupler *NOTE: we don't presently have separate coupler cores
-    ! but iMOAB requires us to register a coupler anyways.
-    integer :: cplbc    = 414
-    integer :: cplbtr   = 415
+    ! baroclinic mesh identifiers
+    integer :: bcOnBc      = 414
+    integer :: bcOnBtr     = 415
+    integer :: bcXbtrOnBtr = 416
 
     ! PID's for MOAB
-    integer,public :: cmpbcPID, cmpbtrPID, bc2btrPID, btr2bcPID
-    integer,public :: cplbcPID, cplbtrPID
+    integer,public :: btrOnBtrPID, btrOnBcPID, btrXbcOnBcPID
+    integer,public :: bcOnBcPID, bcOnBtrPID, bcXbtrOnBtrPID
 
     ! iMOAB communication variables
     character*100 :: appname
     character(:), allocatable :: bc2btrFields, bc2btrFields_btr,&
                                  btr2bcFields, btr2bcFields_btr
     integer, dimension(2) :: bc2btrIndices, btr2bcIndices,&
-                             bc2btrTypes, btr2bcTypes, &
-                             bc2btrIndicesCou, btr2bcIndicesCou, &
-                             bc2btrTypesCou, btr2bcTypesCou
+                             bc2btrTypes, btr2bcTypes
     real (kind=RKIND), dimension(:), allocatable :: bc2btrVar, btr2bcVar, &
                                                     bc2btrVar_btr, btr2bcVar_btr
 
@@ -116,8 +112,9 @@ module ocn_spatial_mode_splitting
                                  disc_method,&
                                  dof_tag_names,&
                                  fv_method
+
     integer :: disc_order, fNoBubble, fMonotoneTypeID, fVolumetric, fNoConserve,&
-               fValidate, fInverseDistanceMap
+               fValidate, fInverseDistanceMap, filter_type
     ! These edge-based quantities are used in remapping but are local variables only.
    real (kind=RKIND), dimension(:), allocatable :: barotropicForcingOnEdgeZonal_bc,&
                                                    barotropicForcingOnEdgeMeridional_bc,&
@@ -129,16 +126,16 @@ module ocn_spatial_mode_splitting
                                                    barotropicThicknessFluxOnEdgeMeridional_btr
 
 
-    ! The following variables are the cartesian coordinate components of 
-    ! the fields that are used for remapping. They are outputs of 
-    ! mpas_reconstruct but are not needed so we allocate them as private
-    ! module variables but they are never used.
-    real (kind=RKIND), dimension(:), allocatable :: barotropicForcingX_bc,&
-                                                    barotropicForcingY_bc,&
-                                                    barotropicForcingZ_bc,&
-                                                    barotropicThicknessFluxX_btr,&
-                                                    barotropicThicknessFluxY_btr,&
-                                                    barotropicThicknessFluxZ_btr
+   ! The following variables are the cartesian coordinate components of 
+   ! the fields that are used for remapping. They are outputs of 
+   ! mpas_reconstruct but are not needed so we allocate them as private
+   ! module variables but they are never used.
+   real (kind=RKIND), dimension(:), allocatable :: barotropicForcingX_bc,&
+                                                   barotropicForcingY_bc,&
+                                                   barotropicForcingZ_bc,&
+                                                   barotropicThicknessFluxX_btr,&
+                                                   barotropicThicknessFluxY_btr,&
+                                                   barotropicThicknessFluxZ_btr
 
 !***********************************************************************
 
@@ -219,7 +216,7 @@ contains
        call mpi_comm_group(bcComm, bcGroup, ierr)
 
        ! initialize moab domain
-       call init_moab_mpas(domain, cmpbc, cmpbcPID, bcComm)
+       call init_moab_mpas(domain, bcOnBc, bcOnBcPID, bcComm)
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
@@ -259,7 +256,7 @@ contains
        call mpi_comm_group(btrComm, btrGroup, ierr)
 
        ! initialize moab domain
-       call init_moab_mpas(domain, cmpbtr, cmpbtrPID, btrComm)
+       call init_moab_mpas(domain, btrOnBtr, btrOnBtrPID, btrComm)
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
@@ -288,207 +285,90 @@ contains
     endif
 
     !--------------------------------------------------------------------
-    ! define communicator groups
+    ! Finish MOAB initialization
     !--------------------------------------------------------------------
 
-    ! setup mpi communicators for coupler domains
-    cplComm    = MPI_COMM_NULL
-    bcCouComm  = MPI_COMM_NULL
-    btrCouComm = MPI_COMM_NULL
-    call mpi_comm_dup(domain % dminfo % comm, &
-                      cplComm, ierr)
-    call mpi_comm_dup(domain % dminfo % comm, &
-                      bcCouComm, ierr)
-    call mpi_comm_dup(domain % dminfo % comm, &
-                      btrCouComm, ierr)
+    ! register applications other than btrOnBtr and bcOnBc
 
-    ! coupler group
-    call mpi_comm_group(cplComm, cplGroup, ierr)
-
-    ! register coupler applications
-
-    ! baroclinic coupler
-    appname = 'bcCouple'//C_NULL_CHAR
+    ! barotropic on baroclinic side
+    appname = 'btrOnBc'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname,&
-                                     cplComm, &
-                                     cplbc, &
-                                     cplbcPID)
-    call errorout(ierr, "failed to register baroclinic coupler application")
+                                     bcComm, &
+                                     btrOnBc, &
+                                     btrOnBcPID)
+    call errorout(ierr, "failed to register btrOnBc application")
 
-    ! barotropic coupler
-    appname = 'btCouple'//C_NULL_CHAR
+    ! barotropic to baroclinic intersection on baroclinic side
+    appname = 'btrXbcOnBc'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname,&
-                                     cplComm, &
-                                     cplbtr, &
-                                     cplbtrPID)
-    call errorout(ierr, "failed to register barotropic coupler application")
+                                     bcComm, &
+                                     btrXbcOnBc, &
+                                     btrXbcOnBcPID)
+    call errorout(ierr, "failed to register btrXbcOnBc application")
 
-    ! register baroclinic to barotropic application on coupler
-    appname = 'bc2btr_cpl'//C_NULL_CHAR
+    ! register baroclinic on barotropic side
+    appname = 'bcOnBtr'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname, &
-                                     cplComm, &
-                                     bc2btrid, &
-                                     bc2btrPID)
-    call errorout(ierr, "failed to register baroclinic to barotropic application")
+                                     btrComm, &
+                                     bcOnBtr, &
+                                     bcOnBtrPID)
+    call errorout(ierr, "failed to register bcOnBtr application")
 
-    ! register barotropic to baroclinic application on coupler
-    appname = 'btr2bc_cpl'//C_NULL_CHAR
+    ! register baroclinic to barotropic intersection on baroclinic side
+    appname = 'bcXbtrOnBtr'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname, &
-                                     cplComm, &
-                                     btr2bcid, &
-                                     btr2bcPID)
-    call errorout(ierr, "failed to register barotropic to baroclinic application")
+                                     btrComm, &
+                                     bcXbtrOnBtr, &
+                                     bcXbtrOnBtrPID)
+    call errorout(ierr, "failed to register bcXbtrOnBtr application")
 
     !--------------------------------------------------------------------
-    ! send baroclinic and barotropic meshes to the coupler
+    ! calculate the projection weights
     !--------------------------------------------------------------------
 
-    ! baroclinic
-    if (bcComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_SendMesh(cmpbcPID, bcCouComm, cplGroup, cplbc, partScheme)
-       call errorout(ierr, "failed to send baroclinic to coupler")
-    endif
-    if (cplComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_ReceiveMesh(cplbcPID, bcCouComm, bcGroup, cmpbc)
-       call errorout(ierr,"failed to receive baroclinic on coupler")
-    endif
+    ! baroclinic => barotropic
+    bc2btr_weights_identifier='bc2btr'//C_NULL_CHAR
+    fv_method='bilin'//C_NULL_CHAR
+    call ocn_spatial_mode_splitting_calc_weights(bcOnBc,&
+                                                 bcOnBtr,&
+                                                 btrOnBtr,&
+                                                 bcXbtrOnBtr,&
+                                                 bcOnBcPID,&
+                                                 bcOnBtrPID,&
+                                                 btrOnBtrPID,&
+                                                 bcXbtrOnBtrPID,&
+                                                 bcComm,&
+                                                 btrComm,&
+                                                 bcGroup,&
+                                                 btrGroup,&
+                                                 bc2btr_weights_identifier,&
+                                                 fv_method)
 
-    ! free send buffers
-    if (bcComm .ne. MPI_COMM_NULL) then
-       context_id = cplbc
-       ierr = iMOAB_FreeSenderBuffers(cmpbcPID, context_id)
-    endif
-
-    ! barotropic
-    if (btrComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_SendMesh(cmpbtrPID, btrCouComm, cplGroup, cplbtr, partScheme)
-       call errorout(ierr, "failed to send barotropic to coupler")
-    endif
-    if (cplComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_ReceiveMesh(cplbtrPID, btrCouComm, btrGroup, cmpbtr)
-       call errorout(ierr,"failed to receive baroclinic on coupler")
-    endif
-
-    ! free send buffers
-    if (btrComm .ne. MPI_COMM_NULL) then
-       context_id = cplbtr
-       ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, context_id)
-    endif
-
-    ! once both the baroclinic and barotropic meshes are registered in moab, we need to calculate
-    ! the overlap meshes and compute the weights for interpolation as well as define our tags
-
-    !--------------------------------------------------------------------
-    ! compute mesh intersections on coupler
-    !--------------------------------------------------------------------
-
-    if (cplComm .ne. MPI_COMM_NULL) then
-       ! baroclinic to barotropic
-       ierr = iMOAB_ComputeMeshIntersectionOnSphere(cplbcPID,&
-                                                    cplbtrPID, &
-                                                    bc2btrPID)
-       call errorout(ierr,"failed to compute intersection of baroclinic to barotropic mesh")
-
-       ! baroclinic to barotropic
-       ierr = iMOAB_ComputeMeshIntersectionOnSphere(cplbtrPID,&
-                                                    cplbcPID, &
-                                                    btr2bcPID)
-       call errorout(ierr,"failed to compute intersection of barotropic to baroclinic mesh")
-    endif
+    ! barotropic => baroclinic
+    btr2bc_weights_identifier='btr2bc'//C_NULL_CHAR
+    fv_method=''//C_NULL_CHAR ! conservative
+    call ocn_spatial_mode_splitting_calc_weights(btrOnBtr,&
+                                                 btrOnBc,&
+                                                 bcOnBc,&
+                                                 btrXbcOnBc,&
+                                                 btrOnBtrPID,&
+                                                 btrOnBcPID,&
+                                                 bcOnBcPID,&
+                                                 btrXbcOnBcPID,&
+                                                 btrComm,&
+                                                 bcComm,&
+                                                 btrGroup,&
+                                                 bcGroup,&
+                                                 btr2bc_weights_identifier,&
+                                                 fv_method)
 
     !--------------------------------------------------------------------
-    ! calculate coverage graphs on bcComm and btrComm
-    !--------------------------------------------------------------------
-
-    ! baroclinic coverage graph
-    if (bcComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_CoverageGraph(bcCouComm, cmpbcPID, cplbcPID, bc2btrPID, &
-                                  cmpbc, cplbc, cplbtr)
-       call errorout(ierr, "failed to compute coverage graph for baroclinic")
-    endif
-
-    ! barotropic coverage graph
-    if (btrComm .ne. MPI_COMM_NULL) then
-       ierr = iMOAB_CoverageGraph(btrCouComm, cmpbtrPID, cplbtrPID, btr2bcPID, &
-                                  cmpbtr, cplbtr, cplbc)
-       call errorout(ierr, "failed to compute coverage graph for baroclinic")
-    endif
-
-    !--------------------------------------------------------------------
-    ! compute scalar projection weights
-    !--------------------------------------------------------------------
-
-    ! get projection weights for baroclinic to barotropic. Note that both domains are finite
-    ! volume discretizations with the same discretization order. Due to this we just use the
-    ! same variables for both source and target mesh
-
-    ! iMOAB variables for calculating the weights
-    bc2btr_weights_identifier = 'bc2btr'//C_NULL_CHAR
-    btr2bc_weights_identifier = 'btr2bc'//C_NULL_CHAR
-    disc_method = 'fv'//C_NULL_CHAR
-    disc_order = 1
-    dof_tag_names = 'GLOBAL_ID'//C_NULL_CHAR
-    fNoBubble = 1
-    fMonotoneTypeID = 0
-    fVolumetric = 0
-    fNoConserve = 0
-    fValidate = 0
-    fInverseDistanceMap = 0
-
-    if (cplComm .ne. MPI_COMM_NULL) then
-
-       ! for coarse to fine (baroclinic to barotropic) use bilinear
-       fv_method = ''//C_NULL_CHAR ! not sure what this is for, figure it out later
-
-       ! baroclinic => barotropic
-       ierr = iMOAB_ComputeScalarProjectionWeights(bc2btrPID, &
-                                                   bc2btr_weights_identifier, &
-                                                   disc_method, &
-                                                   disc_order, &
-                                                   disc_method, &
-                                                   disc_order, &
-                                                   fv_method, &
-                                                   fNoBubble, &
-                                                   fMonotoneTypeID, &
-                                                   fVolumetric, &
-                                                   fInverseDistanceMap, &
-                                                   fNoConserve, &
-                                                   fValidate, &
-                                                   dof_tag_names, &
-                                                   dof_tag_names)
-       call errorout(ierr, "failed to compute weights for baroclinic to barotropic remapping")
-
-       ! for fine to coarse (barotropic to baroclinic) use conservative
-       fv_method = ''//C_NULL_CHAR
-
-       ! barotropic => baroclinic
-       ierr = iMOAB_ComputeScalarProjectionWeights(btr2bcPID, &
-                                                   btr2bc_weights_identifier, &
-                                                   disc_method, &
-                                                   disc_order, &
-                                                   disc_method, &
-                                                   disc_order, &
-                                                   fv_method, &
-                                                   fNoBubble, &
-                                                   fMonotoneTypeID, &
-                                                   fVolumetric, &
-                                                   fInverseDistanceMap, &
-                                                   fNoConserve, &
-                                                   fValidate, &
-                                                   dof_tag_names, &
-                                                   dof_tag_names)
-       call errorout(ierr, "failed to compute weights for barotropic to baroclinic remapping")
-    endif
-
-    !--------------------------------------------------------------------
-    ! define tags on meshes
+    ! define tags
     !--------------------------------------------------------------------
 
     ! all field types are dense double
     bc2btrTypes(:)    = 1 ! DENSE_DOUBLE
     btr2bcTypes(:)    = 1 ! DENSE_DOUBLE
-    bc2btrTypesCou(:) = 1
-    btr2bcTypesCou(:) = 1
 
     ! baroclinic to barotropic fields
     bc2btrFields     = &
@@ -502,106 +382,400 @@ contains
     btr2bcFields_btr = &
       'barotropicThicknessFluxZonal_btr:barotropicThicknessFluxMeridional_btr'//C_NULL_CHAR
 
-    ! define tags on bcComm
-    if (bcComm .ne. MPI_COMM_NULL) then
+    ! baroclinic => barotropic
+    call ocn_spatial_mode_splitting_define_tags(bcOnBcPID,&
+                                                bcOnBtrPID,&
+                                                btrOnBtrPID,&
+                                                bcComm,&
+                                                btrComm,&
+                                                bc2btrFields,&
+                                                bc2btrFields_btr,&
+                                                bc2btrTypes,&
+                                                bc2btrIndices)
 
-       ! baroclinic to barotropic ON baroclinic
-       ierr = iMOAB_DefineTagStorage(cmpbcPID, &
-                                     bc2btrFields, &
-                                     bc2btrTypes(1), &
-                                     1, &
-                                     bc2btrIndices(1))
-       call errorout(ierr, "failed to define bc2btr tags on bc mesh")
+    ! barotropic => baroclinic
+!    call ocn_spatial_mode_splitting_define_tags(btrOnBtrPID,&
+!                                                btrOnBcPID,&
+!                                                bcOnBcPID,&
+!                                                btrComm,&
+!                                                bcComm,&
+!                                                btr2bcFields_btr,&
+!                                                btr2bcFields,&
+!                                                btr2bcTypes,&
+!                                                btr2bcIndices)
 
-       ! barotropic to baroclinic ON baroclinic
-       ierr = iMOAB_DefineTagStorage(cmpbcPID, &
-                                     btr2bcFields, &
-                                     btr2bcTypes(1), &
-                                     1, &
-                                     btr2bcIndices(1))
-       call errorout(ierr, "failed to define btr2bc tags on bc mesh")
-    endif
 
-    ! define tags on btrComm
-    if (btrComm .ne. MPI_COMM_NULL) then
+    !--------------------------------------------------------------------
+    ! allocate buffers
+    !--------------------------------------------------------------------
 
-       ! baroclinic to barotropic ON barotropic
-       ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
-                                     bc2btrFields_btr, &
-                                     bc2btrTypes(2), &
-                                     1, &
-                                     bc2btrIndices(2))
-       call errorout(ierr, "failed to define bc2btr tags on btr mesh")
+    ! baroclinic to barotropic
+    call ocn_spatial_mode_splitting_allocate_buffers(bcOnBcPID,&
+                                                     bcOnBtrPID,&
+                                                     bcComm,&
+                                                     btrComm,&
+                                                     bc2btrVar,&
+                                                     btr2bcVar)
 
-       ! barotropic to baroclinic ON barotropic
-       ierr = iMOAB_DefineTagStorage(cmpbtrPID, &
-                                     btr2bcFields_btr, &
-                                     btr2bcTypes(2), &
-                                     1, &
-                                     btr2bcIndices(2))
-       call errorout(ierr, "failed to define btr2bc tags on btr mesh")
-    endif
-
-    ! define tags on cplComm
-    if (cplComm .ne. MPI_COMM_NULL) then
-
-       ! baroclinic to barotropic ON baroclinic
-       ierr = iMOAB_DefineTagStorage(cplbcPID, &
-                                     bc2btrFields, &
-                                     bc2btrTypesCou(1), &
-                                     1, &
-                                     bc2btrIndicesCou(1))
-       call errorout(ierr, "failed to define bc2btr tags on bc mesh (coupler)")
-
-       ! barotropic to baroclinic ON baroclinic
-       ierr = iMOAB_DefineTagStorage(cplbcPID, &
-                                     btr2bcFields, &
-                                     btr2bcTypesCou(1), &
-                                     1, &
-                                     btr2bcIndicesCou(1))
-       call errorout(ierr, "failed to define btr2bc tags on bc mesh (coupler)")
-
-       ! baroclinic to barotropic ON barotropic
-       ierr = iMOAB_DefineTagStorage(cplbtrPID, &
-                                     bc2btrFields_btr, &
-                                     bc2btrTypesCou(2), &
-                                     1, &
-                                     bc2btrIndicesCou(2))
-       call errorout(ierr, "failed to define bc2btr tags on btr mesh (coupler)")
-
-       ! barotropic to baroclinic ON barotropic
-       ierr = iMOAB_DefineTagStorage(cplbtrPID, &
-                                     btr2bcFields_btr, &
-                                     btr2bcTypesCou(2), &
-                                     1, &
-                                     btr2bcIndicesCou(2))
-       call errorout(ierr, "failed to define btr2bc tags on btr mesh")
-    endif
-
-    ! initialize buffers for transmitting the data (both baroclinic to barotropic and
-    ! baroclinic to barotropic while we have the mesh size)
-    ierr = iMOAB_GetMeshInfo(cmpbcPID, nverts, nelem, nblocks, nsbc, ndbc)
-    call errorout(ierr, "failed to retrieve mesh info from baroclinic mesh")
-    allocate ( bc2btrVar(2*nelem(3)), btr2bcVar(2*nelem(3)) )
-    bc2btrVar(:) = 0d0
-    btr2bcVar(:) = 0d0
-
-    ! initialize buffers for transmitting data from barotropic to baroclinic mesh
-    ierr = iMOAB_GetMeshInfo(cmpbtrPID, nverts, nelem, nblocks, nsbc, ndbc)
-    call errorout(ierr, "failed to retrieve mesh info from barotropic mesh")
-    allocate ( bc2btrVar_btr(2*nelem(3)), btr2bcVar_btr(2*nelem(3)) )
-    bc2btrVar_btr(:) = 0d0
-    btr2bcVar_btr(:) = 0d0
-
-    ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
-    ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
-    ! tags that will only be used once
-    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+    ! barotropic to baroclinic
+!    call ocn_spatial_mode_splitting_allocate_buffers(btrOnBtrPID,&
+!                                                     btrOnBcPID,&
+!                                                     btrComm,&
+!                                                     bcComm,&
+!                                                     btr2bcVar_btr,&
+!                                                     bc2btrVar_btr)
 
 #endif
     !--------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_init_moab_domain!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_calc_weights
+!
+!> \brief   Calculates the weights for spatial mode splitting
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  Sends source mesh to target "side", calculates mesh intersection, 
+!>  calculates coverage graph, calculates remapping weights.
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_calc_weights(sourceOnSourceGID,&
+                                                       sourceOnTargetGID,&
+                                                       targetOnTargetGID,&
+                                                       overlapGID,&
+                                                       sourceOnSourcePID,&
+                                                       sourceOnTargetPID,&
+                                                       targetOnTargetPID,&
+                                                       overlapPID,&
+                                                       sourceComm,&
+                                                       targetComm,&
+                                                       sourceGroup,&
+                                                       targetGroup,&
+                                                       weights_identifier,&
+                                                       fv_method)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! global id's
+    integer,intent(inout) :: sourceOnSourceGID, sourceOnTargetGID,&
+                             targetOnTargetGID, overlapGID
+
+    ! moab PID's
+    integer,intent(inout) :: sourceOnSourcePID, SourceOnTargetPID,&
+                             targetOnTargetPID, overlapPID
+
+    ! communicators and groups
+    integer,intent(in) :: sourceComm, targetComm, sourceGroup, targetGroup
+
+    ! remapping tags and method
+    character(:),allocatable,intent(in) :: weights_identifier,fv_method
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! iMOAB variables
+    integer :: partScheme
+    character(:),allocatable :: discMethod
+    character(:),allocatable :: dofTagNames
+    integer :: discOrder,fNoBubble,fMonotoneTypeID,fVolumetric,fNoConserve,&
+               fValidate,fInverseDistanceMap
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! set some of the iMOAB parameters
+    partScheme=0 ! use trivial partitioner
+    discMethod='fv'//C_NULL_CHAR
+    discOrder=1
+    dofTagNames='GLOBAL_ID'//C_NULL_CHAR
+    fNoBubble=1
+    fMonotoneTypeID=0
+    fVolumetric=0
+    fNoConserve=0
+    fValidate=0
+    fInverseDistanceMap=0
+
+    ! send source mesh to target domain
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_SendMesh(sourceOnSourcePID,&
+                           targetComm,&
+                           targetGroup,&
+                           sourceOnTargetGID,&
+                           partScheme)
+       call errorout(ierr,'failed to send mesh')
+    endif
+
+    ! receive mesh on target
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_ReceiveMesh(sourceOnTargetPID,&
+                              targetComm,&
+                              sourceGroup,&
+                              sourceOnSourceGID)
+       call errorout(ierr,'failed to receive mesh')
+    endif
+
+    ! free sender buffers
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_FreeSenderBuffers(sourceOnSourcePID,&
+                                    sourceOnTargetGID)
+       call errorout(ierr,'failed to free sender buffers')
+    endif
+
+    ! calculate mesh intersection
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_ComputeMeshIntersectionOnSphere(sourceOnTargetPID,&
+                                                  targetOnTargetPID,&
+                                                  overlapPID)
+       call errorout(ierr,'failed to compute mesh intersection')
+    endif
+
+    ! calculate coverage graph
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_CoverageGraph(sourceComm,&
+                                sourceOnSourcePID,&
+                                sourceOnTargetPID,&
+                                overlapPID,&
+                                sourceOnSourceGID,&
+                                sourceOnTargetGID,&
+                                sourceOnTargetGID)
+       call errorout(ierr,'failed to compute coverage graph')
+    endif
+
+    ! calculate projection weights
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_ComputeScalarProjectionWeights(overlapPID,&
+                                                 weights_identifier,&
+                                                 discMethod,&
+                                                 discOrder,&
+                                                 discMethod,&
+                                                 discOrder,&
+                                                 fv_method,&
+                                                 fNoBubble,&
+                                                 fMonotoneTypeID,&
+                                                 fVolumetric,&
+                                                 fInverseDistanceMap,&
+                                                 fNoConserve,&
+                                                 fValidate,&
+                                                 dofTagNames,&
+                                                 dofTagNames)
+       call errorout(ierr,'unable to compute weights')
+    endif
+
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_calc_weights!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_define_tags
+!
+!> \brief   Adds tags for moab remapping
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_define_tags(sourceOnSourcePID,&
+                                                      sourceOnTargetPID,&
+                                                      targetOnTargetPID,&
+                                                      sourceComm,&
+                                                      targetComm,&
+                                                      fieldTags,&
+                                                      fieldTagsProjected,&
+                                                      tagTypes,&
+                                                      tagIndex)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! mesh PIDs
+    integer,intent(inout) :: sourceOnSourcePID,sourceOnTargetPID,&
+                             targetOnTargetPID
+
+
+    ! tag types and indices
+    integer,dimension(2),intent(inout) :: tagTypes
+    integer,dimension(2),intent(inout) :: tagIndex
+
+    ! mpi communicators
+    integer,intent(in) :: sourceComm,targetComm
+
+    ! names of fields to be projected
+    character(:),allocatable,intent(in) :: fieldTags,fieldTagsProjected
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! number of degrees of freedom (always 1 for us)
+    integer :: nDOFs
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    nDOFS=1 ! 
+
+    ! define source field tags on source
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_DefineTagStorage(sourceOnSourcePID,&
+                                   fieldTags,&
+                                   tagTypes(1),&
+                                   nDOFS,&
+                                   tagIndex(1))
+       call errorout(ierr,'failed to define tags on sourceOnSource')
+    endif
+
+    ! define tags on target "side"
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+
+      ! source fields on source
+      ierr=iMOAB_DefineTagStorage(sourceOnTargetPID,&
+                                  fieldTags,&
+                                  tagTypes(1),&
+                                  nDOFS,&
+                                  tagIndex(1))
+       call errorout(ierr,'failed to define tags on sourceOnTarget')
+
+       ! target fields
+       ierr=iMOAB_DefineTagStorage(targetOnTargetPID,&
+                                   fieldTagsProjected,&
+                                   tagTypes(2),&
+                                   nDOFS,&
+                                   tagIndex(2))
+       call errorout(ierr,'failed to define tags on targetOnTarget')
+
+    endif
+
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_define_tags!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_allocate_buffers
+!
+!> \brief   Allocates buffers for iMOAB
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_allocate_buffers(sourceOnSourcePID,&
+                                                           sourceOnTargetPID,&
+                                                           sourceComm,&
+                                                           targetComm,&
+                                                           source2target,&
+                                                           target2source)!{{{
+
+    !-----------------------------------------------------------------
+    ! in/out variables
+    !-----------------------------------------------------------------
+
+    ! buffers
+    real(kind=RKIND),dimension(:),allocatable,intent(inout) :: source2target,&
+                                                               target2source
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! mesh PIDs
+    integer,intent(in) :: sourceOnSourcePID,sourceOnTargetPID
+
+    ! mpi communicators
+    integer,intent(in) :: sourceComm,targetComm
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! mesh dimensions
+    integer, dimension(3) :: nverts, nelem, nblocks, nsbc, ndbc
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! on source
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+
+       ! get mesh dimensions from moab
+       ierr=iMOAB_GetMeshInfo(sourceOnSourcePID,nverts,nelem,nblocks,nsbc,ndbc)
+       call errorout(ierr,'failed to retrieve mesh info (source on source)')
+
+       ! initialize buffers
+       if ( .NOT. allocated( source2target ) ) then
+          allocate ( source2target(2*nelem(3)) )
+       endif
+       if ( .NOT. allocated( target2source ) ) then
+          allocate ( target2source(2*nelem(3)) )
+       endif
+    endif
+
+    ! on target
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+
+       ! get mesh dimensions from moab
+       ierr=iMOAB_GetMeshInfo(sourceOntargetPID,nverts,nelem,nblocks,nsbc,ndbc)
+       call errorout(ierr,'failed to retrieve mesh info (source on source)')
+
+       ! initialize buffers
+       if ( .NOT. allocated( source2target ) ) then
+          allocate ( source2target(2*nelem(3)) )
+       endif
+       if ( .NOT. allocated( target2source ) ) then
+          allocate ( target2source(2*nelem(3)) )
+       endif
+    endif
+
+    source2target(:)=0d0
+    target2source(:)=0d0
+
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_allocate_buffers!}}}
 
 !***********************************************************************
 !
@@ -668,157 +842,6 @@ contains
 
 #ifdef HAVE_MOAB
 
-    ! to avoid confusion designate pointers for barotropic and baroclinic domain
-    domain_bc => domain % core % domainlist
-    domain_btr => domain_bc % next
-
-    !--------------------------------------------------------------------
-    ! get bottomDepth from barotropic domain
-    !--------------------------------------------------------------------
-
-    block_ptr => domain_btr % blocklist
-    do while(associated(block_ptr))
-
-        ! setup pools
-        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-
-        ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
-
-        ! get bottomDepth
-        call mpas_pool_get_array(meshPool, 'bottomDepth',&
-                                 bottomDepth_btr)
-
-        write(6,*) ""
-        write(6,*) ""
-        write(6,*) "max bottom depth btr = ",maxval(bottomDepth_btr)
-        write(6,*) "min bottom depth btr = ",minval(bottomDepth_btr)
-        write(6,*) ""
-        write(6,*) ""
-
-        ! pack buffers. We simply use the first half of the buffers we already
-        ! created so that we do not need to create a one-time tag
-        do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = bottomDepth_btr(iCell)
-        enddo
-
-        ! assign data to barotropic mesh on compute processor
-        if (btrComm .ne. MPI_COMM_NULL) then
-
-           ! assign values to moab
-           ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
-                                            btr2bcFields_btr,&
-                                            2*nCellsSolve_btr,&
-                                            1,&
-                                            btr2bcVar_btr)
-           call errorout(ierr,"failed to assign bottom depth to barotropic mesh")
-
-           ! send element tag
-           ierr = iMOAB_SendElementTag(cmpbtrPID,&
-                                       btr2bcFields_btr,&
-                                       btrCouComm,&
-                                       cplbc)
-           call errorout(ierr,"failed to send bottom depth to coupler")
-        endif
-
-        ! receive data on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           
-           ! receive data
-           ierr = iMOAB_ReceiveElementTag(cplbtrPID,&
-                                          btr2bcFields_btr,&
-                                          btrCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive bottom depth on coupler")
-        endif
-
-        ! free send buffers
-        if (btrComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
-           call errorout(ierr,"failed to free send buffers 936")
-        endif
-
-        ! do remapping
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
-                                                     0,&
-                                                     btr2bc_weights_identifier,&
-                                                     btr2bcFields_btr,&
-                                                     btr2bcFields)
-           call errorout(ierr,"failed to reproject bottom depth data to baroclinic mesh")
-
-           ! send data to cmpbc
-           ierr = iMOAB_SendElementTag(cplbcPID,&
-                                       btr2bcFields, &
-                                       bcCouComm,cmpbc)
-           call errorout(ierr,"failed to send bottom depth back to coupler")
-        endif
-
-        ! receive data from coupler on baroclinic
-        if (bcComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ReceiveElementTag(cmpbcPID,&
-                                          btr2bcFields,&
-                                          bcCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive bottom depth back on coupler")
-        endif
-        block_ptr => block_ptr % next
-    enddo
-
-    !--------------------------------------------------------------------
-    ! remap bottomDepth to baroclinic domain
-    !--------------------------------------------------------------------
-
-    block_ptr => domain_bc % blocklist
-    do while(associated(block_ptr))
-
-        ! setup pools
-        call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-
-        ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
-
-        ! get bottomDepth from baroclinic domain
-        call mpas_pool_get_array(meshPool, 'bottomDepth',&
-                                 bottomDepth_bc)
-        write(6,*) ""
-        write(6,*) ""
-        write(6,*) "max bottom depth bc = ",maxval(bottomDepth_bc)
-        write(6,*) "min bottom depth bc = ",minval(bottomDepth_bc)
-        write(6,*) ""
-        write(6,*) ""
-
-        ! get remapped data from iMOAB
-        ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
-                                         btr2bcFields,&
-                                         2*nCellsSolve_bc,&
-                                         1,&
-                                         btr2bcVar)
-        call errorout(ierr,"failed to get bottomDepth_bc from iMOAB")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_bc
-            bottomDepth_bc(iCell) = btr2bcVar(iCell)
-        enddo
-
-        ! exchange halos
-        call mpas_dmpar_field_halo_exch(domain, 'bottomDepth')
-
-        write(6,*) ""
-        write(6,*) ""
-        write(6,*) "max bottom depth bc = ",maxval(bottomDepth_bc)
-        write(6,*) "min bottom depth bc = ",minval(bottomDepth_bc)
-        write(6,*) ""
-        write(6,*) ""
-
-        block_ptr => block_ptr % next
-    enddo
-
-    ! re-initialize the baroclinic mesh to update the vertical levels to match our new bathymetry
-    !call ocn_meshDestroy(ierr)
-    !call ocn_meshCreate(domain_bc)
 
 #endif
     end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
@@ -871,6 +894,9 @@ contains
                         nEdgesSolve_bc, nEdgesSolve_btr,&
                         vertexDegree_btr, nEdgesAll_btr,&
                         nCellsAll_btr
+
+    ! size info for moab
+    integer :: totalNumVals, entity_type
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
@@ -956,72 +982,33 @@ contains
             bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
         enddo
 
-        ! assign data to baroclinic mesh on compute processor 
-        if (bcComm .ne. MPI_COMM_NULL) then
+        ! perform remapping
+        totalNumVals=2*nCellsSolve_bc
+        entity_type=1
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "about to send from baroclinic to barotropic"
+        write(6,*) ""
+        write(6,*) ""
+        call ocn_spatial_mode_splitting_remap_data(bcOnBc,&
+                                                   bcOnBtr,&
+                                                   btrOnBtr,&
+                                                   bcXbtrOnBtr,&
+                                                   bcOnBcPID,&
+                                                   bcOnBtrPID,&
+                                                   btrOnBtrPID,&
+                                                   bcXbtrOnBtrPID,&
+                                                   bcComm,&
+                                                   btrComm,&
+                                                   bcGroup,&
+                                                   btrGroup,&
+                                                   bc2btrFields,&
+                                                   bc2btrFields_btr,&
+                                                   totalNumVals,&
+                                                   entity_type,&
+                                                   bc2btrVar,&
+                                                   bc2btr_weights_identifier)
 
-           ! assign values to moab
-           ierr=iMOAB_SetDoubleTagStorage(cmpbcPID,&
-                                          bc2btrFields,&
-                                          2*nCellsSolve_bc,&
-                                          1,&
-                                          bc2btrVar)
-           call errorout(ierr,"failed to assign bc2btr data to baroclinic mesh")
-
-           ! send element tag
-           ierr = iMOAB_SendElementTag(cmpbcPID,&
-                                       bc2btrFields,&
-                                       bcCouComm,&
-                                       cplbtr)
-           call errorout(ierr,"failed to send bc2btr data tag")
-        endif
-
-        ! receive data on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           
-           ! receive data
-           ierr = iMOAB_ReceiveElementTag(cplbcPID,&
-                                          bc2btrFields,&
-                                          bcCouComm,&
-                                          cplbtr)
-           call errorout(ierr,"failed to receive bc2btr data tag")
-        endif
-
-        ! free send buffers
-        if (bcComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cmpbcPID, cplbtr)
-           call errorout(ierr,"failed to free send buffers 698")
-        endif
-
-        ! do remapping on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ApplyScalarProjectionWeights(bc2btrPID,&
-                                                     0,&
-                                                     bc2btr_weights_identifier,&
-                                                     bc2btrFields,&
-                                                     bc2btrFields_btr)
-           call errorout(ierr,"failed to reproject bc2btr data to barotropic mesh")
-
-           ! send data to cmpbtr
-           ierr = iMOAB_SendElementTag(cplbtrPID, &
-                                       bc2btrFields_btr, &
-                                       btrCouComm, cmpbtr)
-           call errorout(ierr,"failed to send bc2btr_btr tags")
-        endif
-
-        ! receive data from coupler on barotropic
-        if (btrComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ReceiveElementTag(cmpbtrPID, &
-                                          bc2btrFields_btr, &
-                                          btrCouComm, &
-                                          cplbtr)
-           call errorout(ierr,"failed to receive bc2btr_btr tags")
-        endif
-
-        ! free send buffers
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cplbtrPID, cmpbtr)
-           call errorout(ierr,"failed to free send buffers 728")
-        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -1056,10 +1043,12 @@ contains
                                  barotropicForcingMeridional_btr)
 
         ! get remapped data from iMOAB
-        ierr = iMOAB_GetDoubleTagStorage(cmpbtrPID,&
+        totalNumVals=2*nCellsSolve_btr
+        entity_type=1
+        ierr = iMOAB_GetDoubleTagStorage(btrOnBtrPID,&
                                          bc2btrFields_btr,&
-                                         2*nCellsSolve_btr,&
-                                         1,&
+                                         totalNumVals,&
+                                         entity_type,&
                                          bc2btrVar_btr)
         call errorout(ierr,"failed to get bc2btrVar_btr")
 
@@ -1150,6 +1139,9 @@ contains
                         vertexDegree_bc, nEdgesAll_bc,&
                         nCellsAll_bc
 
+    ! size info for moab
+    integer :: totalNumVals, entity_type
+
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
                                                 barotropicThicknessFlux_btr,&
@@ -1232,66 +1224,33 @@ contains
             btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
         enddo
 
-        ! assign data to barotropic mesh on compute processor
-        if (btrComm .ne. MPI_COMM_NULL) then
+        ! perform remapping
+        totalNumVals=2*nCellsSolve_btr
+        entity_type=1
+        write(6,*) ""
+        write(6,*) ""
+        write(6,*) "about to send from barotropic to baroclinic"
+        write(6,*) ""
+        write(6,*) ""
+        call ocn_spatial_mode_splitting_remap_data(btrOnBtr,&
+                                                   btrOnBc,&
+                                                   bcOnBc,&
+                                                   btrXbcOnBc,&
+                                                   btrOnBtrPID,&
+                                                   btrOnBcPID,&
+                                                   bcOnBcPID,&
+                                                   btrXbcOnBcPID,&
+                                                   btrComm,&
+                                                   bcComm,&
+                                                   btrGroup,&
+                                                   bcGroup,&
+                                                   btr2bcFields_btr,&
+                                                   btr2bcFields,&
+                                                   totalNumVals,&
+                                                   entity_type,&
+                                                   btr2bcVar_btr,&
+                                                   btr2bc_weights_identifier)
 
-           ! assign values to moab
-           ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
-                                            btr2bcFields_btr,&
-                                            2*nCellsSolve_btr,&
-                                            1,&
-                                            btr2bcVar_btr)
-           call errorout(ierr,"failed to assign btr2bcFields_btr to barotropic mesh")
-
-           ! send element tag
-           ierr = iMOAB_SendElementTag(cmpbtrPID,&
-                                       btr2bcFields_btr,&
-                                       btrCouComm,&
-                                       cplbc)
-           call errorout(ierr,"failed to send btr2bcFields_btr to coupler")
-        endif
-
-        ! receive data on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           
-           ! receive data
-           ierr = iMOAB_ReceiveElementTag(cplbtrPID,&
-                                          btr2bcFields_btr,&
-                                          btrCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive btr2bcFields_btr on coupler")
-        endif
-
-        ! free send buffers
-        if (btrComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
-           call errorout(ierr,"failed to free send buffers 936")
-        endif
-
-        ! do remapping
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
-                                                     0,&
-                                                     btr2bc_weights_identifier,&
-                                                     btr2bcFields_btr,&
-                                                     btr2bcFields)
-           call errorout(ierr,"failed to reproject btr2bc data to baroclinic mesh")
-
-           ! send data to cmpbc
-           ierr = iMOAB_SendElementTag(cplbcPID,&
-                                       btr2bcFields, &
-                                       bcCouComm,cmpbc)
-           call errorout(ierr,"failed to send btr2bcFields")
-        endif
-
-        ! receive data from coupler on baroclinic
-        if (bcComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ReceiveElementTag(cmpbcPID,&
-                                          btr2bcFields,&
-                                          bcCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive btr2bcFields")
-        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -1327,10 +1286,12 @@ contains
                                  barotropicThicknessFluxMeridional_bc)
 
         ! get remapped data from iMOAB
-        ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
+        totalNumVals=2*nCellsSolve_bc
+        entity_type=1
+        ierr = iMOAB_GetDoubleTagStorage(bcOnBc,&
                                          btr2bcFields,&
-                                         2*nCellsSolve_bc,&
-                                         1,&
+                                         totalNumVals,&
+                                         entity_type,&
                                          btr2bcVar)
         call errorout(ierr,"failed to get btr2bcVar from iMOAB")
 
@@ -1364,6 +1325,152 @@ contains
     enddo
 #endif
     end subroutine ocn_spatial_mode_splitting_btr2bc_remapping!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_remap_data
+!
+!> \brief   
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_remap_data(sourceOnSourceGID,&
+                                                     sourceOnTargetGID,&
+                                                     targetOnTargetGID,&
+                                                     overlapGID,&
+                                                     sourceOnSourcePID,&
+                                                     sourceOnTargetPID,&
+                                                     targetOnTargetPID,&
+                                                     overlapPID,&
+                                                     sourceComm,&
+                                                     targetComm,&
+                                                     sourceGroup,&
+                                                     targetGroup,&
+                                                     fieldTags,&
+                                                     fieldTagsProjected,&
+                                                     totalNumVals,&
+                                                     entity_type,&
+                                                     buffer,&
+                                                     weights_identifier)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! moab pids
+    integer,intent(in) :: sourceOnSourcePID,sourceOnTargetPID,&
+                          targetOnTargetPID,&
+                          overlapPID
+
+    ! moab global id's
+    integer,intent(in) :: sourceOnSourceGID,sourceOnTargetGID,&
+                          targetOnTargetGID,&
+                          overlapGID
+
+    ! mpi comms/groups
+    integer,intent(in) :: sourceComm,targetComm
+    integer,intent(in) :: sourceGroup,targetGroup
+
+    ! names of fields
+    character(:),allocatable,intent(in) :: fieldTags,fieldTagsProjected
+
+    ! data for moab
+    integer,intent(in) :: totalNumVals ! number of values being sent, e.g., 
+                                       ! 2*nCells for barotropicForcing
+                                       ! (zonal and meridional components)
+    integer,intent(in) :: entity_type  ! 0 for vertex, 1 for element, (2 for edge?)
+
+    ! data being projected
+    real (kind=RKIND),dimension(:),intent(in) :: buffer
+
+    ! what weights we are using
+    character(:),allocatable,intent(in) :: weights_identifier
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! imoab filter type (we use no filter)
+    integer :: filter_type
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! set filter type
+    filter_type=0
+
+    ! store values in moab on source side and send to target side
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_SetDoubleTagStorage(sourceOnSourcePID,&
+                                      fieldTags,&
+                                      totalNumVals,&
+                                      entity_type,&
+                                      buffer)
+       call errorout(ierr,'unable to set storage on source')
+
+       ! send to target "side"
+       ierr=iMOAB_SendElementTag(sourceOnSourcePID,&
+                                 fieldTags,&
+                                 targetComm,&
+                                 sourceOnTargetGID)
+       call errorout(ierr,'unable to send data from source "side" to target "side"')
+    endif
+
+    ! receive values on target side
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+
+       write(6,*) ""
+       write(6,*) ""
+       write(6,*) "fieldTags=",fieldTags
+       write(6,*) ""
+       write(6,*) ""
+       ierr=iMOAB_ReceiveElementTag(sourceOnTargetPID,&
+                                    fieldTags,&
+                                    targetComm,&
+                                    sourceOnTargetGID)
+       call errorout(ierr,'unable to receive data on target "side"')
+    endif
+
+    ! free send buffers
+    if ( sourceComm .NE. MPI_COMM_NULL ) then
+       ierr=iMOAB_FreeSenderBuffers(sourceOnSourcePID,sourceOnTargetGID)
+       call errorout(ierr,"unable to free sender buffers")
+    endif
+
+    ! perform remapping
+    if ( targetComm .NE. MPI_COMM_NULL ) then
+       ! write meshes out
+       ierr=iMOAB_WriteMesh(bcOnBcPID,'bcOnBc.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_WriteMesh(bcOnBtrPID,'bcOnBtr.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_WriteMesh(bcXbtrOnBtrPID,'bcXbtrOnBtr.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_WriteMesh(btrOnBtrPID,'btrOnBtr.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_WriteMesh(btrOnBcPID,'btrOnBc.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_WriteMesh(btrXbcOnBcPID,'btrXbcOnBc.h5m'//C_NULL_CHAR,'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+       ierr=iMOAB_ApplyScalarProjectionWeights(overlapPID,&
+                                               filter_type,&
+                                               weights_identifier,&
+                                               fieldTags,&
+                                               fieldTagsProjected)
+       call errorout(ierr,'unable to reproject :(')
+    endif
+
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_remap_data!}}}
 
 !***********************************************************************
 !
