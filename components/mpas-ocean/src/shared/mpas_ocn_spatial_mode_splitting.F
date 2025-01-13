@@ -105,6 +105,7 @@ module ocn_spatial_mode_splitting
                              bc2btrTypes, btr2bcTypes
     real (kind=RKIND), dimension(:), allocatable :: bc2btrVar, btr2bcVar, &
                                                     bc2btrVar_btr, btr2bcVar_btr
+    integer :: partScheme = 0 ! trivial partitioner
 
     ! iMOAB weights variables
     character(:), allocatable :: bc2btr_weights_identifier,&
@@ -115,6 +116,7 @@ module ocn_spatial_mode_splitting
 
     integer :: disc_order, fNoBubble, fMonotoneTypeID, fVolumetric, fNoConserve,&
                fValidate, fInverseDistanceMap, filter_type
+
     ! These edge-based quantities are used in remapping but are local variables only.
    real (kind=RKIND), dimension(:), allocatable :: barotropicForcingOnEdgeZonal_bc,&
                                                    barotropicForcingOnEdgeMeridional_bc,&
@@ -136,6 +138,12 @@ module ocn_spatial_mode_splitting
                                                    barotropicThicknessFluxX_btr,&
                                                    barotropicThicknessFluxY_btr,&
                                                    barotropicThicknessFluxZ_btr
+
+   ! The following variables are for conservatively remapping the bathymetry from barotropic to
+   ! baroclinic domain.
+   character(:), allocatable :: bottomDepthTag,bottomDepthTag_btr
+   integer, dimension(2) :: bottomDepthIndex, bottomDepthType
+   character(:), allocatable :: bottomDepth_weights_identifier
 
 !***********************************************************************
 
@@ -183,13 +191,9 @@ contains
     real (kind=RKIND), dimension(:,:), pointer :: edgeTangentVectors_btr
 
     ! iMOAB variables
-    integer :: partScheme = 0 ! trivial partitioner
     integer :: nghlay = 0
     integer :: context_id
-
-    ! for reading mesh back in
-    character(:),allocatable :: filename
-    character(:),allocatable :: readopts
+    integer :: nTags
 
     ! End preamble
     !-----------------------------------------------------------------
@@ -205,6 +209,9 @@ contains
     bcOnBtr     = 415
     bcXbtrOnBtr = 416
 
+    ! number of tags we define in this subroutine
+    nTags=2
+
     ! get configuration to see if we are using the mode splitting, if not return
     call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
                               config_spatial_mode_splitting)
@@ -215,9 +222,6 @@ contains
     call mpas_log_write('MPAS-Ocean must be compiled with HAVE_MOAB=true for ',//
                          'spatial mode splitting.', MPAS_LOG_CRIT)
 #else
-
-    ! set read options
-    readopts ='PARALLEL=READ_PART;PARTITION=PARALLEL_PARTITION;PARALLEL_RESOLVE_SHARED_ENTS'//C_NULL_CHAR
 
     ! if this is baroclinic domain, call mpas_moabmesh and then return. If barotropic
     ! compute overlap/weights, etc.
@@ -341,42 +345,54 @@ contains
     call errorout(ierr, "failed to register btrXbcOnBc application")
 
     !--------------------------------------------------------------------
+    ! calculate the mesh intersections
+    !--------------------------------------------------------------------
+
+    ! baroclinic => barotropic
+    call ocn_spatial_mode_splitting_calc_mesh_intersection(bcOnBcPID,&
+                                                           bcOnBtrPID,&
+                                                           btrOnBtrPID,&
+                                                           bcXbtrOnBtrPID,&
+                                                           bcOnBc,&
+                                                           bcOnBtr,&
+                                                           btrOnBtr,&
+                                                           bcXbtrOnBtr,&
+                                                           bcComm,&
+                                                           btrComm,&
+                                                           bcGroup,&
+                                                           btrGroup)
+
+    ! barotropic => baroclinic
+    call ocn_spatial_mode_splitting_calc_mesh_intersection(btrOnBtrPID,&
+                                                           btrOnBcPID,&
+                                                           bcOnBcPID,&
+                                                           btrXbcOnBcPID,&
+                                                           btrOnBtr,&
+                                                           btrOnBc,&
+                                                           bcOnBc,&
+                                                           btrXbcOnBc,&
+                                                           btrComm,&
+                                                           bcComm,&
+                                                           btrGroup,&
+                                                           bcGroup)
+
+    !--------------------------------------------------------------------
     ! calculate the projection weights
     !--------------------------------------------------------------------
 
     ! baroclinic => barotropic
     bc2btr_weights_identifier='bc2btr'//C_NULL_CHAR
     fv_method='bilin'//C_NULL_CHAR
-    call ocn_spatial_mode_splitting_calc_weights(bcOnBc,&
-                                                 bcOnBtr,&
-                                                 btrOnBtr,&
-                                                 bcXbtrOnBtr,&
-                                                 bcOnBcPID,&
-                                                 bcOnBtrPID,&
-                                                 btrOnBtrPID,&
-                                                 bcXbtrOnBtrPID,&
+    call ocn_spatial_mode_splitting_calc_weights(bcXbtrOnBtrPID,&
                                                  bcComm,&
-                                                 btrComm,&
-                                                 bcGroup,&
-                                                 btrGroup,&
                                                  bc2btr_weights_identifier,&
                                                  fv_method)
 
     ! barotropic => baroclinic
     btr2bc_weights_identifier='btr2bc'//C_NULL_CHAR
     fv_method=''//C_NULL_CHAR ! conservative
-    call ocn_spatial_mode_splitting_calc_weights(btrOnBtr,&
-                                                 btrOnBc,&
-                                                 bcOnBc,&
-                                                 btrXbcOnBc,&
-                                                 btrOnBtrPID,&
-                                                 btrOnBcPID,&
-                                                 bcOnBcPID,&
-                                                 btrXbcOnBcPID,&
-                                                 btrComm,&
+    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
                                                  bcComm,&
-                                                 btrGroup,&
-                                                 bcGroup,&
                                                  btr2bc_weights_identifier,&
                                                  fv_method)
 
@@ -428,14 +444,13 @@ contains
     !--------------------------------------------------------------------
 
     ! baroclinic to barotropic
-
-    ! baroclinic to barotropic
     call ocn_spatial_mode_splitting_allocate_buffers(bcOnBcPID,&
                                                      bcOnBtrPID,&
                                                      bcComm,&
                                                      btrComm,&
                                                      bc2btrVar,&
-                                                     btr2bcVar)
+                                                     btr2bcVar,&
+                                                     nTags)
 
     ! barotropic to baroclinic
     call ocn_spatial_mode_splitting_allocate_buffers(btrOnBtrPID,&
@@ -443,8 +458,14 @@ contains
                                                      btrComm,&
                                                      bcComm,&
                                                      btr2bcVar_btr,&
-                                                     bc2btrVar_btr)
+                                                     bc2btrVar_btr,&
+                                                     nTags)
 
+    !--------------------------------------------------------------------
+    ! remap bottomDepth from barotropic to baroclinic domain
+    !--------------------------------------------------------------------
+
+    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
 #endif
     !--------------------------------------------------------------------
 
@@ -452,30 +473,28 @@ contains
 
 !***********************************************************************
 !
-!  routine ocn_spatial_mode_splitting_calc_weights
+!  routine ocn_spatial_mode_splitting_calc_mesh_intersection
 !
 !> \brief   Calculates the weights for spatial mode splitting
 !> \author  Coleman Blakely
 !> \date    April 2024
 !> \details
 !>  Sends source mesh to target "side", calculates mesh intersection, 
-!>  calculates coverage graph, calculates remapping weights.
+!>  calculates coverage graph.
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_calc_weights(sourceOnSourceGID,&
-                                                       sourceOnTargetGID,&
-                                                       targetOnTargetGID,&
-                                                       overlapGID,&
-                                                       sourceOnSourcePID,&
+    subroutine ocn_spatial_mode_splitting_calc_mesh_intersection(sourceOnSourcePID,&
                                                        sourceOnTargetPID,&
                                                        targetOnTargetPID,&
                                                        overlapPID,&
+                                                       sourceOnSourceGID,&
+                                                       sourceOnTargetGID,&
+                                                       targetOnTargetGID,&
+                                                       overlapGID,&
                                                        sourceComm,&
                                                        targetComm,&
                                                        sourceGroup,&
-                                                       targetGroup,&
-                                                       weights_identifier,&
-                                                       fv_method)!{{{
+                                                       targetGroup)
 
     !-----------------------------------------------------------------
     ! input variables
@@ -492,9 +511,6 @@ contains
     ! communicators and groups
     integer,intent(inout) :: sourceComm, targetComm, sourceGroup, targetGroup
 
-    ! remapping tags and method
-    character(:),allocatable,intent(inout) :: weights_identifier,fv_method
-
     !-----------------------------------------------------------------
     ! output variables
     !-----------------------------------------------------------------
@@ -502,13 +518,6 @@ contains
     !-----------------------------------------------------------------
     ! local variables
     !-----------------------------------------------------------------
-
-    ! iMOAB variables
-    integer :: partScheme
-    character(:),allocatable :: discMethod
-    character(:),allocatable :: dofTagNames
-    integer :: discOrder,fNoBubble,fMonotoneTypeID,fVolumetric,fNoConserve,&
-               fValidate,fInverseDistanceMap
 
     ! error handling
     integer :: ierr
@@ -518,18 +527,6 @@ contains
     ! Begin code
 
 #ifdef HAVE_MOAB
-
-    ! set some of the iMOAB parameters
-    partScheme=0 ! use trivial partitioner
-    discMethod='fv'//C_NULL_CHAR
-    discOrder=1
-    dofTagNames='GLOBAL_ID'//C_NULL_CHAR
-    fNoBubble=1
-    fMonotoneTypeID=0
-    fVolumetric=0
-    fNoConserve=0
-    fValidate=0
-    fInverseDistanceMap=0
 
     ! send source mesh to target domain
     if ( sourceComm .NE. MPI_COMM_NULL ) then
@@ -577,8 +574,78 @@ contains
        call errorout(ierr,'failed to compute coverage graph')
     endif
 
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_calc_mesh_intersection!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_calc_weights
+!
+!> \brief   Calculates the weights for spatial mode splitting
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  Sends source mesh to target "side", calculates mesh intersection, 
+!>  calculates coverage graph, calculates remapping weights.
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_calc_weights(overlapPID,&
+                                                       targetComm,&
+                                                       weights_identifier,&
+                                                       fv_method)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! moab PID's
+    integer,intent(inout) :: overlapPID
+
+    ! target communicator
+    integer,intent(inout) :: targetComm
+
+    ! remapping tags and method
+    character(:),allocatable,intent(inout) :: weights_identifier,fv_method
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! iMOAB variables
+    character(:),allocatable :: discMethod
+    character(:),allocatable :: dofTagNames
+    integer :: discOrder,fNoBubble,fMonotoneTypeID,fVolumetric,fNoConserve,&
+               fValidate,fInverseDistanceMap
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! set some of the iMOAB parameters
+    discMethod='fv'//C_NULL_CHAR
+    discOrder=1
+    dofTagNames='GLOBAL_ID'//C_NULL_CHAR
+    fNoBubble=1
+    fMonotoneTypeID=0
+    fVolumetric=0
+    fNoConserve=0
+    fValidate=0
+    fInverseDistanceMap=0
+
     ! calculate projection weights
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
+    if ( targetComm .NE. MPI_COMM_NULL ) then
        ierr=iMOAB_ComputeScalarProjectionWeights(overlapPID,&
                                                  weights_identifier,&
                                                  discMethod,&
@@ -689,15 +756,6 @@ contains
        ! set tags to 0
        ierr=iMOAB_GetMeshInfo(sourceOnSourcePID,nverts,nelem,nblocks,nsbc,ndbc)
        call errorout(ierr,'failed to retrieve mesh info (source on source)')
-       totalNumVals=2*nelem(3) ! 2 tags
-       allocate(vals(totalNumVals))
-       vals(:)=0d0
-       ierr=iMOAB_SetDoubleTagStorage(sourceOnSourcePID,&
-                                      fieldTags,&
-                                      totalNumVals,&
-                                      dtype,&
-                                      vals)
-       deallocate(vals)
     endif
 
     ! define tags on target "side"
@@ -714,15 +772,6 @@ contains
        ! set tags to 0
        ierr=iMOAB_GetMeshInfo(sourceOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
        call errorout(ierr,'failed to retrieve mesh info (source on source)')
-       totalNumVals=2*nelem(3) ! 2 tags
-       allocate(vals(totalNumVals))
-       vals(:)=0d0
-       ierr=iMOAB_SetDoubleTagStorage(sourceOnTargetPID,&
-                                      fieldTags,&
-                                      totalNumVals,&
-                                      dtype,&
-                                      vals)
-       deallocate(vals)
 
        ! target fields
        ierr=iMOAB_DefineTagStorage(targetOnTargetPID,&
@@ -735,15 +784,6 @@ contains
        ! set tags to 0
        ierr=iMOAB_GetMeshInfo(targetOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
        call errorout(ierr,'failed to retrieve mesh info (source on source)')
-       totalNumVals=2*nelem(3) ! 2 tags
-       allocate(vals(totalNumVals))
-       vals(:)=0d0
-       ierr=iMOAB_SetDoubleTagStorage(targetOnTargetPID,&
-                                      fieldTagsProjected,&
-                                      totalNumVals,&
-                                      dtype,&
-                                      vals)
-       deallocate(vals)
 
     endif
 
@@ -768,7 +808,8 @@ contains
                                                            sourceComm,&
                                                            targetComm,&
                                                            source2target,&
-                                                           target2source)!{{{
+                                                           target2source,&
+                                                           nTags)!{{{
 
     !-----------------------------------------------------------------
     ! in/out variables
@@ -787,6 +828,9 @@ contains
 
     ! mpi communicators
     integer,intent(inout) :: sourceComm,targetComm
+
+    ! number of tags
+    integer,intent(in) :: nTags
 
     !-----------------------------------------------------------------
     ! output variables
@@ -817,10 +861,10 @@ contains
 
        ! initialize buffers
        if ( .NOT. allocated( source2target ) ) then
-          allocate ( source2target(2*nelem(3)) )
+          allocate ( source2target(nTags*nelem(3)) )
        endif
        if ( .NOT. allocated( target2source ) ) then
-          allocate ( target2source(2*nelem(3)) )
+          allocate ( target2source(nTags*nelem(3)) )
        endif
     endif
 
@@ -833,10 +877,10 @@ contains
 
        ! initialize buffers
        if ( .NOT. allocated( source2target ) ) then
-          allocate ( source2target(2*nelem(3)) )
+          allocate ( source2target(nTags*nelem(3)) )
        endif
        if ( .NOT. allocated( target2source ) ) then
-          allocate ( target2source(2*nelem(3)) )
+          allocate ( target2source(nTags*nelem(3)) )
        endif
     endif
 
@@ -879,24 +923,23 @@ contains
     !-----------------------------------------------------------------
     ! domain pointer
     type (domain_type), pointer :: domain_bc,domain_btr
+
     ! configuration info
     logical, pointer :: config_spatial_mode_splitting
-    ! 
+
+    ! pool pointers
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
 
-    ! mesh information
-    integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
-                        nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_bc, nEdgesAll_bc,&
-                        nCellsAll_bc
+    ! number of cells on each mesh
+    integer, pointer :: nCellsSolve_btr, nCellsSolve_bc
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc,&
                                                 bottomDepth_btr
 
-    ! looping variables
-    integer :: iCell, iEdge
+    ! other parameters moab needs
+    integer :: totalNumVals, entity_type
 
     ! error handling
     integer :: ierr
@@ -913,6 +956,109 @@ contains
     endif
 
 #ifdef HAVE_MOAB
+
+    !--------------------------------------------------------------------
+    ! add bottomDepth to MOAB
+    !--------------------------------------------------------------------
+
+    ! set filter type (no filter)
+    filter_type=0
+
+    ! create weights for remapping bottomDepth
+    bottomDepth_weights_identifier='bottomDepthWeights'//C_NULL_CHAR
+    fv_method=''//C_NULL_CHAR
+    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
+                                                 bcComm,&
+                                                 bottomDepth_weights_identifier,&
+                                                 fv_method)
+
+    ! define tags for bottomDepth
+    bottomDepthTag='bottomDepth_bc'//C_NULL_CHAR
+    bottomDepthTag_btr='bottomDepth_btr'//C_NULL_CHAR
+    bottomDepthType(:)=1
+    call ocn_spatial_mode_splitting_define_tags(btrOnBtrPID,&
+                                                btrOnBcPID,&
+                                                bcOnBCPID,&
+                                                btrComm,&
+                                                bcComm,&
+                                                bottomDepthTag_btr,&
+                                                bottomDepthTag,&
+                                                bottomDepthType,&
+                                                bottomDepthIndex)
+
+
+    !--------------------------------------------------------------------
+    ! remap bottomDepth from barotropic to baroclinic domains
+    !--------------------------------------------------------------------
+
+    ! get bottomDepth array from baroclinic domain
+    domain_bc => domain % core % domainlist
+    block_ptr => domain_bc % blocklist
+    do while(associated(block_ptr))
+
+       ! setup pools
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       ! get nCells
+       call mpas_pool_get_dimension(meshPool,'nCellsSolve',nCellsSolve_bc)
+
+       ! get bottomDepth from baroclinic domain
+       call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_bc)
+
+       block_ptr => block_ptr % next
+    enddo 
+
+    ! get bottomDepth array on barotropic domain
+    domain_btr => domain_bc % next
+    block_ptr => domain_btr % blocklist
+    do while(associated(block_ptr))
+
+       ! setup pools
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       ! get nCells
+       call mpas_pool_get_dimension(meshPool,'nCellsSolve',nCellsSolve_btr)
+
+       ! get bottomDepth from baroclinic domain
+       call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_btr)
+
+       block_ptr => block_ptr % next
+    enddo 
+
+    ! exchange halos just in case (this shouldn't be necessary)
+    call mpas_dmpar_field_halo_exch(domain_btr,'bottomDepth')
+
+    ! remap bathymetry
+    totalNumVals=nCellsSolve_btr
+    entity_type=1
+    call ocn_spatial_mode_splitting_remap_data(btrOnBtrPID,&
+                                               btrOnBcPID,&
+                                               bcOnBcPID,&
+                                               btrXbcOnBcPID,&
+                                               btrOnBtr,&
+                                               btrOnBc,&
+                                               bcOnBc,&
+                                               btrXbcOnBc,&
+                                               btrComm,&
+                                               bcComm,&
+                                               btrGroup,&
+                                               bcGroup,&
+                                               bottomDepthTag_btr,&
+                                               bottomDepthTag,&
+                                               totalNumVals,&
+                                               entity_type,&
+                                               bottomDepth_btr,&
+                                               bottomDepth_weights_identifier)
+
+    ! store remapped bathymetry in bottomDepth_bc
+    totalNumVals=nCellsSolve_bc
+    entity_type=1
+    ierr = iMOAB_GetDoubleTagStorage(bcOnBcPID,&
+                                     bottomDepthTag,&
+                                     totalNumVals,&
+                                     entity_type,&
+                                     bottomDepth_bc)
+    call errorout(ierr,'failed to get bottomDepth_bc')
 
 
 #endif
@@ -1057,14 +1203,14 @@ contains
         ! perform remapping
         totalNumVals=2*nCellsSolve_bc
         entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(bcOnBc,&
-                                                   bcOnBtr,&
-                                                   btrOnBtr,&
-                                                   bcXbtrOnBtr,&
-                                                   bcOnBcPID,&
+        call ocn_spatial_mode_splitting_remap_data(bcOnBcPID,&
                                                    bcOnBtrPID,&
                                                    btrOnBtrPID,&
                                                    bcXbtrOnBtrPID,&
+                                                   bcOnBc,&
+                                                   bcOnBtr,&
+                                                   btrOnBtr,&
+                                                   bcXbtrOnBtr,&
                                                    bcComm,&
                                                    btrComm,&
                                                    bcGroup,&
@@ -1143,8 +1289,6 @@ contains
                                            sin(angleEdge_btr(iEdge))*meridional_edge
         enddo
 
-        call mpas_dmpar_field_halo_exch(domain_btr,'barotropicForcing')
-
         call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
         call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_btr)
         do iEdge = 1,nEdgesAll_btr
@@ -1155,7 +1299,6 @@ contains
            elseif (cell2.lt.1.OR.cell2.gt.nCellsAll_btr) then
               barotropicForcing_btr(iEdge)=0d0
            endif
-!!           barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
         enddo
 
         block_ptr => block_ptr % next
@@ -1294,14 +1437,14 @@ contains
         ! perform remapping
         totalNumVals=2*nCellsSolve_btr
         entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(btrOnBtr,&
-                                                   btrOnBc,&
-                                                   bcOnBc,&
-                                                   btrXbcOnBc,&
-                                                   btrOnBtrPID,&
+        call ocn_spatial_mode_splitting_remap_data(btrOnBtrPID,&
                                                    btrOnBcPID,&
                                                    bcOnBcPID,&
                                                    btrXbcOnBcPID,&
+                                                   btrOnBtr,&
+                                                   btrOnBc,&
+                                                   bcOnBc,&
+                                                   btrXbcOnBc,&
                                                    btrComm,&
                                                    bcComm,&
                                                    btrGroup,&
@@ -1381,8 +1524,6 @@ contains
                                             sin(angleEdge_bc(iEdge))*meridional_edge
         enddo
 
-        call mpas_dmpar_field_halo_exch(domain,'barotropicThicknessFlux')
-
         block_ptr => block_ptr % next
     enddo
 #endif
@@ -1398,14 +1539,14 @@ contains
 !> \details
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_remap_data(sourceOnSourceGID,&
-                                                     sourceOnTargetGID,&
-                                                     targetOnTargetGID,&
-                                                     overlapGID,&
-                                                     sourceOnSourcePID,&
+    subroutine ocn_spatial_mode_splitting_remap_data(sourceOnSourcePID,&
                                                      sourceOnTargetPID,&
                                                      targetOnTargetPID,&
                                                      overlapPID,&
+                                                     sourceOnSourceGID,&
+                                                     sourceOnTargetGID,&
+                                                     targetOnTargetGID,&
+                                                     overlapGID,&
                                                      sourceComm,&
                                                      targetComm,&
                                                      sourceGroup,&

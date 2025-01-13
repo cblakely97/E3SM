@@ -30,9 +30,8 @@ module ocn_init_remap
    use ocn_config
    use ocn_init_vertical_grids
    use ocn_init_cell_markers
-   ! CPB
    use ocn_spatial_mode_splitting
-   ! end CPB
+
    implicit none
    private
    save
@@ -74,182 +73,275 @@ contains
 !
 !-----------------------------------------------------------------------
 
-  subroutine ocn_init_setup_remap(domain, iErr)!{{{
-  implicit none
+   subroutine ocn_init_setup_remap(domain, iErr)!{{{
+      implicit none
 
-    !--------------------------------------------------------------------
+      !--------------------------------------------------------------------
 
-    type (domain_type), intent(inout) :: domain
-    type (domain_type), pointer :: domain_btr
-    integer, intent(out) :: iErr
+      type (domain_type), intent(inout) :: domain
+      type (domain_type), pointer :: domain_btr
+      integer, intent(out) :: iErr
 
-    type (block_type), pointer :: block_ptr
-    type (mpas_pool_type), pointer :: meshPool
-    type (mpas_pool_type), pointer :: diagnosticsPool
-    
-    ! local variables
-    integer :: iCell, iEdge, k, idx
-    real (kind=RKIND) :: yMin, yMax, xMin, xMax, dcEdgeMin, dcEdgeMinGlobal
-    real (kind=RKIND) :: yMinGlobal, yMaxGlobal, yMidGlobal, xMinGlobal, xMaxGlobal
-    real (kind=RKIND), dimension(:), pointer :: interfaceLocations
+      type (block_type), pointer :: block_ptr
+      type (mpas_pool_type), pointer :: meshPool
+      type (mpas_pool_type), pointer :: diagnosticsPool
 
-    ! Define dimension pointers
-    integer, pointer :: nCellsSolve, nEdgesSolve, nVertLevels, nVertLevelsP1
-    integer, pointer :: index_temperature, index_salinity
-    integer :: nEdges
+      ! local variables
+      integer :: iCell, iEdge, k, idx
+      real (kind=RKIND) :: yMin, yMax, xMin, xMax, dcEdgeMin, dcEdgeMinGlobal
+      real (kind=RKIND) :: yMinGlobal, yMaxGlobal, yMidGlobal, xMinGlobal, xMaxGlobal
+      real (kind=RKIND), dimension(:), pointer :: interfaceLocations
 
-    ! Define variable pointers
-    logical, pointer :: on_a_sphere
-    integer, dimension(:), pointer :: maxLevelCell
-    real (kind=RKIND), dimension(:), pointer :: xCell, yCell,refBottomDepth, dcEdge
-    integer, dimension(:,:), pointer :: cellsOnEdge
-    real (kind=RKIND), dimension(:), pointer :: angleEdge
-    
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
-                                                barotropicForcingMeridional_bc
-    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
-                                                barotropicThicknessFluxMeridional_btr
-    integer, pointer :: nCellsSolve_bc, nCellsAll_bc, nCellsSolve_btr, nCellsAll_btr
-    real (kind=RKIND), dimension(:), pointer :: xEdge, yEdge
-    iErr = 0
+      ! Define dimension pointers
+      integer, pointer :: nCellsSolve, nEdgesSolve, nVertLevels, nVertLevelsP1
+      integer, pointer :: index_temperature, index_salinity
+      integer :: nEdges
 
-    if(config_init_configuration .ne. trim('remap')) return
+      ! Define variable pointers
+      logical, pointer :: on_a_sphere
+      integer, dimension(:), pointer :: maxLevelCell
+      real (kind=RKIND), dimension(:), pointer :: xCell, yCell,refBottomDepth, dcEdge
+      integer, dimension(:,:), pointer :: cellsOnEdge
+      real (kind=RKIND), dimension(:), pointer :: angleEdge
 
-    ! cpb
-    domain_btr => domain % next
-    ! end cpb
+      real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
+                                             barotropicForcingMeridional_bc
+      real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
+                                             barotropicThicknessFluxMeridional_btr
+      integer, pointer :: nCellsSolve_bc, nCellsAll_bc, nCellsSolve_btr, nCellsAll_btr
+      real (kind=RKIND), dimension(:), pointer :: xEdge, yEdge
+      iErr = 0
 
-    ! Determine vertical grid for configuration
-    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-    call mpas_pool_get_dimension(meshPool, 'nVertLevelsP1', nVertLevelsP1)
-    call mpas_pool_get_config(meshPool, 'on_a_sphere', on_a_sphere)
-    ! CPB question: Since in this case we are using a depth-averaged quantity we don't really care
-    ! about the vertical grid unless I am crazy. I think I can just set nVertLevelsP1 = 1
-    nVertLevelsP1=2
-    ! end CPB
+      if(config_init_configuration .ne. trim('remap')) return
 
-    allocate(interfaceLocations(nVertLevelsP1))
-    call ocn_generate_vertical_grid( config_vertical_grid, interfaceLocations )
+      ! cpb
+      domain_btr => domain % next
+      ! end cpb
 
-    !--------------------------------------------------------------------
-    ! Use this section to make boundaries non-periodic
-    !--------------------------------------------------------------------
+      ! Determine vertical grid for configuration
+      call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+      call mpas_pool_get_dimension(meshPool, 'nVertLevelsP1', nVertLevelsP1)
+      call mpas_pool_get_config(meshPool, 'on_a_sphere', on_a_sphere)
+      ! CPB question: Since in this case we are using a depth-averaged quantity we don't really care
+      ! about the vertical grid unless I am crazy. I think I can just set nVertLevelsP1 = 1
+      nVertLevelsP1=2
+      ! end CPB
 
-    ! Initalize min/max values to large positive and negative values
-    yMin = 1.0E10_RKIND
-    yMax = -1.0E10_RKIND
-    xMin = 1.0E10_RKIND
-    xMax = -1.0E10_RKIND
-    dcEdgeMin = 1.0E10_RKIND
+      allocate(interfaceLocations(nVertLevelsP1))
+      call ocn_generate_vertical_grid( config_vertical_grid, interfaceLocations )
 
-    ! Determine local min and max values.
-    block_ptr => domain % blocklist
-    do while(associated(block_ptr))
-       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+      !--------------------------------------------------------------------
+      ! Use this section to make boundaries non-periodic
+      !--------------------------------------------------------------------
 
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
-       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve)
+      ! Initalize min/max values to large positive and negative values
+      yMin = 1.0E10_RKIND
+      yMax = -1.0E10_RKIND
+      xMin = 1.0E10_RKIND
+      xMax = -1.0E10_RKIND
+      dcEdgeMin = 1.0E10_RKIND
 
-       call mpas_pool_get_array(meshPool, 'xCell', xCell)
-       call mpas_pool_get_array(meshPool, 'yCell', yCell)
-       call mpas_pool_get_array(meshPool, 'dcEdge', dcEdge)
+      ! Determine local min and max values.
+      block_ptr => domain % blocklist
+      do while(associated(block_ptr))
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
 
-       yMin = min( yMin, minval(yCell(1:nCellsSolve)))
-       yMax = max( yMax, maxval(yCell(1:nCellsSolve)))
-       xMin = min( xMin, minval(xCell(1:nCellsSolve)))
-       xMax = max( xMax, maxval(xCell(1:nCellsSolve)))
-       dcEdgeMin = min( dcEdgeMin, minval(dcEdge(1:nEdgesSolve)))
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+      call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve)
 
-       block_ptr => block_ptr % next
-    end do
+      call mpas_pool_get_array(meshPool, 'xCell', xCell)
+      call mpas_pool_get_array(meshPool, 'yCell', yCell)
+      call mpas_pool_get_array(meshPool, 'dcEdge', dcEdge)
 
-    ! Determine global min and max values.
-    call mpas_dmpar_min_real(domain % dminfo, yMin, yMinGlobal)
-    call mpas_dmpar_max_real(domain % dminfo, yMax, yMaxGlobal)
-    call mpas_dmpar_min_real(domain % dminfo, xMin, xMinGlobal)
-    call mpas_dmpar_max_real(domain % dminfo, xMax, xMaxGlobal)
-    call mpas_dmpar_min_real(domain % dminfo, dcEdgeMin, dcEdgeMinGlobal)
+      yMin = min( yMin, minval(yCell(1:nCellsSolve)))
+      yMax = max( yMax, maxval(yCell(1:nCellsSolve)))
+      xMin = min( xMin, minval(xCell(1:nCellsSolve)))
+      xMax = max( xMax, maxval(xCell(1:nCellsSolve)))
+      dcEdgeMin = min( dcEdgeMin, minval(dcEdge(1:nEdgesSolve)))
 
-    ! zero out halos to test halo exchanges
-    block_ptr => domain % blocklist
-    do while(associated(block_ptr))
-       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-       call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+      block_ptr => block_ptr % next
+      end do
 
-       call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
-       call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
+      ! Determine global min and max values.
+      call mpas_dmpar_min_real(domain % dminfo, yMin, yMinGlobal)
+      call mpas_dmpar_max_real(domain % dminfo, yMax, yMaxGlobal)
+      call mpas_dmpar_min_real(domain % dminfo, xMin, xMinGlobal)
+      call mpas_dmpar_max_real(domain % dminfo, xMax, xMaxGlobal)
+      call mpas_dmpar_min_real(domain % dminfo, dcEdgeMin, dcEdgeMinGlobal)
 
-       ! get input barotropicForcing on baroclinic mesh and zero out halos
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-       call mpas_pool_get_dimension(meshPool, 'nCellsOwned', nCellsAll_bc)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingZonal',&
-                                barotropicForcingZonal_bc)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingMeridional',&
-                                barotropicForcingMeridional_bc)
+      ! zero out halos to test halo exchanges
+      block_ptr => domain % blocklist
+      do while(associated(block_ptr))
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
-!       do iCell = nCellsSolve_bc,nCellsAll_bc
-!          barotropicForcingZonal_bc(iCell) = 0d0
-!          barotropicForcingMeridional_bc(iCell) = 0d0
-!       enddo
+      call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
+      call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
 
-       block_ptr => block_ptr % next
-    end do
+      ! get input barotropicForcing on baroclinic mesh and zero out halos
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+      call mpas_pool_get_dimension(meshPool, 'nCellsOwned', nCellsAll_bc)
+      call mpas_pool_get_array(diagnosticsPool,&
+                             'barotropicForcingZonal',&
+                             barotropicForcingZonal_bc)
+      call mpas_pool_get_array(diagnosticsPool,&
+                             'barotropicForcingMeridional',&
+                             barotropicForcingMeridional_bc)
 
-    ! zero out halos to test halo exchanges
-    block_ptr => domain_btr % blocklist
-    do while(associated(block_ptr))
-       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
-       call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+      !       do iCell = nCellsSolve_bc,nCellsAll_bc
+      !          barotropicForcingZonal_bc(iCell) = 0d0
+      !          barotropicForcingMeridional_bc(iCell) = 0d0
+      !       enddo
 
-       call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
-       call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
+      block_ptr => block_ptr % next
+      end do
 
-       ! get input barotropicForcing on baroclinic mesh and zero out halos
-       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-       call mpas_pool_get_dimension(meshPool, 'nCellsAll', nCellsAll_btr)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxZonal',&
-                                barotropicThicknessFluxZonal_btr)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxMeridional',&
-                                barotropicThicknessFluxMeridional_btr)
+      ! zero out halos to test halo exchanges
+      block_ptr => domain_btr % blocklist
+      do while(associated(block_ptr))
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
-!       do iCell = nCellsSolve_btr,nCellsAll_btr
-!          barotropicThicknessFluxZonal_btr(iCell) = 0d0
-!          barotropicThicknessFluxMeridional_btr(iCell) = 0d0
-!       enddo
+      call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
+      call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
 
-       block_ptr => block_ptr % next
-    end do
+      ! get input barotropicForcing on baroclinic mesh and zero out halos
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
+      call mpas_pool_get_dimension(meshPool, 'nCellsAll', nCellsAll_btr)
+      call mpas_pool_get_array(diagnosticsPool,&
+                             'barotropicThicknessFluxZonal',&
+                             barotropicThicknessFluxZonal_btr)
+      call mpas_pool_get_array(diagnosticsPool,&
+                             'barotropicThicknessFluxMeridional',&
+                             barotropicThicknessFluxMeridional_btr)
+
+      block_ptr => block_ptr % next
+      end do
+
+      !--------------------------------------------------------------------
+      ! apply an analytical field to test the remapping
+      !----------------------------------------------------------------------   
+
+      call ocn_init_remap_analytical_field(domain_btr)
 
 
-    !--------------------------------------------------------------------
-    ! initialize moab for spatial mode splitting
-    !--------------------------------------------------------------------
+      !--------------------------------------------------------------------
+      ! initialize moab for spatial mode splitting
+      !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_init_moab_domain(domain)
-    call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
-    ! remap bathymetry from fine to coarse mesh so that we have consistent bathy. We will just use
-    ! the first half of bc2btrVar_btr to send to the first half of bc2btrVar rather than create new
-    ! tags that will only be used once
-    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+      call ocn_spatial_mode_splitting_init_moab_domain(domain)
+      call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
 
-    !--------------------------------------------------------------------
-    ! baroclinic => barotropic
-    !--------------------------------------------------------------------
+      !--------------------------------------------------------------------
+      ! baroclinic => barotropic
+      !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+      call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
-    !--------------------------------------------------------------------
-    ! barotropic => baroclinic
-    !--------------------------------------------------------------------
+      !--------------------------------------------------------------------
+      ! barotropic => baroclinic
+      !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
-    !--------------------------------------------------------------------
+      call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
+      call ocn_init_vertical_grid(domain,ierr)
+      !--------------------------------------------------------------------
 
-  end subroutine ocn_init_setup_remap!}}}
+   end subroutine ocn_init_setup_remap!}}}
+
+!***********************************************************************
+!
+!  routine ocn_init_remap_analytical_field
+!
+!> \brief   Validation for this initial condition
+!> \author  FILL_IN_AUTHOR
+!> \date    FILL_IN_DATE
+!> \details
+!>  Applies an analytical field to the edge-based arrays representing 
+!>  barotropicThicknessFlux (all on the barotropic side)
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_init_remap_analytical_field(domain)!{{{
+      implicit none
+      !-----------------------------------------------------------------
+      ! input variables
+      !-----------------------------------------------------------------
+      type(domain_type),intent(inout) :: domain
+
+      !-----------------------------------------------------------------
+      ! out variables
+      !-----------------------------------------------------------------
+
+      !-----------------------------------------------------------------
+      ! local variables 
+      !-----------------------------------------------------------------
+
+      ! for getting data from domain structure
+      type(block_type), pointer :: block_ptr
+      type(mpas_pool_type), pointer :: meshPool
+      type(mpas_pool_type), pointer :: diagnosticsPool
+
+      ! mesh size information
+      integer, pointer ::nEdgesSolve_btr
+
+      ! mesh edge orientation information
+      real (kind=RKIND), dimension(:), pointer :: angleEdge_btr,&
+                                                  latEdge_btr,&
+                                                  lonEdge_btr
+
+      ! arrays to store diagnostic fields
+      real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_btr
+
+      ! arrays to store temporary variables for calculating the analytical field
+      real (kind=RKIND) :: flon_edge, flat_edge
+
+      ! for loops
+      integer :: iEdge
+
+      ! error handling
+      integer :: ierr
+
+      ! End preamble
+      !-----------------------------------------------------------------
+      ! Begin code
+
+      block_ptr => domain % blocklist
+      do while(associated(block_ptr))
+
+         ! setup pools
+         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+
+         ! get num edges
+         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+
+         ! get edge info
+         call mpas_pool_get_array(meshPool,'angleEdge',angleEdge_btr)
+         call mpas_pool_get_array(meshPool,'lonEdge',lonEdge_btr)
+         call mpas_pool_get_array(meshPool,'latEdge',latEdge_btr)
+
+         ! get barotropicThicknessFlux array
+         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
+                                 barotropicThicknessFlux_btr)
+
+         do iEdge = 1,nEdgesSolve_btr
+            flon_edge=2d0*cos(24d0*lonEdge_btr(iEdge))
+            flat_edge=2d0*cos(24d0*latEdge_btr(iEdge))
+            barotropicThicknessFlux_btr(iEdge) = cos(angleEdge_btr(iEdge))*flon_edge+&
+                                                 sin(angleEdge_btr(iEdge))*flat_edge
+         enddo
+
+         ! exchange halos for barotropicThicknessFlux
+         call mpas_dmpar_field_halo_exch(domain,'barotropicThicknessFlux')
+
+
+         block_ptr => block_ptr % next
+      enddo
+
+      ! End code
+      !-----------------------------------------------------------------
+   end subroutine ocn_init_remap_analytical_field!}}}
+   !--------------------------------------------------------------------
 
 
 !***********************************************************************
