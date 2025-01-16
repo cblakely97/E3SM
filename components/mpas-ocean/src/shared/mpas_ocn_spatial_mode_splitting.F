@@ -38,7 +38,7 @@ module ocn_spatial_mode_splitting
     use mpas_vector_operations
 
     use ocn_diagnostics_variables
-    use ocn_mesh
+    use ocn_mesh, only : ocn_meshCreate, ocn_meshDestroy
     use ocn_constants
     use ocn_config
 
@@ -466,6 +466,13 @@ contains
     !--------------------------------------------------------------------
 
     !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+
+    !--------------------------------------------------------------------
+    ! update the vertical grid on the baroclinic domain
+    !--------------------------------------------------------------------
+
+    !call ocn_spatial_mode_splitting_update_vertical_grid(domain)
+
 #endif
     !--------------------------------------------------------------------
 
@@ -1004,9 +1011,14 @@ contains
 
        ! get bottomDepth from baroclinic domain
        call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_bc)
+       write(6,*) ""
+       write(6,*) ""
+       write(6,*) "MAXVAL(bottomDepth_bc) = ",MAXVAL(bottomDepth_bc)
+       write(6,*) ""
+       write(6,*) ""
 
        block_ptr => block_ptr % next
-    enddo 
+    end do 
 
     ! get bottomDepth array on barotropic domain
     domain_btr => domain_bc % next
@@ -1021,9 +1033,14 @@ contains
 
        ! get bottomDepth from baroclinic domain
        call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_btr)
+       write(6,*) ""
+       write(6,*) ""
+       write(6,*) "MAXVAL(bottomDepth_btr) = ",MAXVAL(bottomDepth_btr)
+       write(6,*) ""
+       write(6,*) ""
 
        block_ptr => block_ptr % next
-    enddo 
+    end do 
 
     ! exchange halos just in case (this shouldn't be necessary)
     call mpas_dmpar_field_halo_exch(domain_btr,'bottomDepth')
@@ -1059,10 +1076,301 @@ contains
                                      entity_type,&
                                      bottomDepth_bc)
     call errorout(ierr,'failed to get bottomDepth_bc')
+    write(6,*) ""
+    write(6,*) ""
+    write(6,*) "MAXVAL(bottomDepth_bc) = ",MAXVAL(bottomDepth_bc)
+    write(6,*) ""
+    write(6,*) ""
 
 
 #endif
     end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_update_vertical_grid
+!
+!> \brief   Updates vertical grid following remapping of bathymetry
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  This routine updates the vertical grid following conservative remap-
+!>  ping of bathymetry
+!
+!-----------------------------------------------------------------------
+
+
+    subroutine ocn_spatial_mode_splitting_update_vertical_grid(domain)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+    ! domain pointer
+    type (domain_type), pointer :: domain_bc
+
+    ! block pointer
+    type (block_type), pointer :: block_ptr
+
+    ! pools
+    type(mpas_pool_type), pointer :: meshPool, verticalMeshPool, statePool
+
+    ! dimension pointers
+    integer, pointer :: nVertLevels, nVertLevelsP1, &
+                        nCellsAll, nEdgesAll, &
+                        nVerticesAll, vertexDegree
+
+    ! variable pointers from mesh pool
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth
+    real (kind=RKIND), dimension(:), pointer :: refBottomDepth
+    real (kind=RKIND), dimension(:), pointer :: refBottomDepthTopOfCell
+    integer, dimension(:), pointer :: maxLevelCell
+    integer, dimension(:), pointer :: maxLevelEdgeTop
+    integer, dimension(:), pointer :: maxLevelEdgeBot
+    integer, dimension(:), pointer :: maxLevelVertexTop
+    integer, dimension(:), pointer :: maxLevelVertexBot
+    integer, dimension(:,:), pointer :: cellsOnEdge
+    integer, dimension(:,:), pointer :: cellsOnVertex
+
+    ! variable pointers from verticalMesh pool
+    real (kind=RKIND), dimension(:,:), pointer :: restingThickness
+    real (kind=RKIND), dimension(:), pointer :: refZMid
+    real (kind=RKIND), dimension(:), pointer :: refLayerThickness
+
+    ! variable pointers from state pool
+    real (kind=RKIND), dimension(:,:), pointer :: layerThickness
+    real (kind=RKIND), dimension(:), pointer :: ssh_bc
+
+    ! local work variables
+    real (kind=RKIND) :: maxBottomDepth, minBottomDepth, wc_thickness, delta_z
+    integer :: idz, numConsistent, numInConsistent, numCase1, numCase2, numCase3
+
+    ! for loops
+    integer :: iCell, iEdge, iVertex, iVertLevel, kk
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! ensure we are on the baroclinic domain
+    domain_bc => domain % core % domainlist
+    block_ptr => domain_bc % blocklist
+    do while(associated(block_ptr))
+
+      ! get pools
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'verticalMesh', verticalMeshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+      ! get dimensions
+      call mpas_pool_get_dimension(meshPool, 'nVertLevels', nVertLevels)
+      call mpas_pool_get_dimension(meshPool, 'nVertLevelsP1', nVertLevelsP1)
+      call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll)
+      call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll)
+      call mpas_pool_get_dimension(meshPool, 'nVertices', nVerticesAll)
+      call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree)
+
+      ! get mesh pool variables
+      call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth)
+      call mpas_pool_get_array(meshPool, 'refBottomDepth', refBottomDepth)
+      call mpas_pool_get_array(meshPool, 'refBottomDepthTopOfCell', refBottomDepthTopOfCell)
+      call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell)
+      call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', maxLevelEdgeTop)
+      call mpas_pool_get_array(meshPool, 'maxLevelEdgeBot', maxLevelEdgeBot)
+      call mpas_pool_get_array(meshPool, 'maxLevelVertexTop', maxLevelVertexTop)
+      call mpas_pool_get_array(meshPool, 'maxLevelVertexBot', maxLevelVertexBot)
+      call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge)
+      call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex)
+
+      ! get verticalMesh pool variables
+      call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness)
+      call mpas_pool_get_array(verticalMeshPool, 'refZMid', refZMid)
+      call mpas_pool_get_array(verticalMeshPool, 'refLayerThickness', refLayerThickness)
+      
+      ! get state pool variables
+      call mpas_pool_get_array(statePool, 'layerThickness', layerThickness, 1)
+      call mpas_pool_get_array(statePool, 'ssh', ssh_bc, 1)
+
+      ! get new maximum bottomDepth and make sure it matches refBottomDepth. By this I mean that we
+      ! need refBottomDepth(n-1) to be greater than or equal to the maximum bottom depth
+      maxBottomDepth=MAXVAL(bottomDepth)
+      if (maxBottomDepth .GT. refBottomDepth(nVertLevels)) then
+         write(6,*) "new max depth is too deep"
+         write(6,*) "maxBottomDepth=",maxBottomDepth
+         write(6,*) "refBottomDepth(nVertLevels)=",refBottomDepth(nVertLevels)
+         call mpas_log_write('new max(bottomDepth) > refBotomDepth(nVertLevels)',MPAS_LOG_CRIT)
+      endif
+
+      ! loop over each cell and update as needed
+      numConsistent=0
+      numInConsistent=0
+      numCase1=0
+      numCase2=0
+      numCase3=0
+      do iCell = 1,nCellsAll
+
+         ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
+         ! sum(layerThickness) should equal bottomDepth+ssh
+
+         ! find the sum of the layerThicknesses
+         wc_thickness = 0d0
+         do iVertLevel = 1,maxLevelCell(iCell)
+            wc_thickness = wc_thickness + restingThickness(iVertLevel,iCell)
+         end do
+
+         ! check if the sum of the layer thicknesses is consistent with the bottom depth
+         if ( wc_thickness .EQ. bottomDepth(iCell) ) then
+            numConsistent=numConsistent+1
+            cycle
+         end if
+         numInconsistent=numInconsistent+1
+
+         ! if we are inconsistent, then we need to adjust. First, calculate the max and min bottom
+         ! depths we allow for this layer (+/- 50% of refZMid)
+
+         ! find which level our bottom depth resides in
+         ! NOTE: because I do this, we will only ever need to remove a layer. Adding a layer will
+         ! never be required
+         do iVertLevel = 1,nVertLevels
+            if ( refBottomDepth(iVertLevel) .GE. bottomDepth(iCell) ) then
+               idz = iVertLevel
+               exit
+            end if
+         end do
+
+         ! find min depth (refBottomDepth - 50% of layer thickness)
+         minBottomDepth = 0.5d0 * ( refBottomDepth(idz-1) + refBottomDepth(idz) )
+
+         ! if bottomDepth <= minBottomDepth, subtract a layer
+         if ( bottomDepth(iCell) .LT. minBottomDepth ) then
+            numCase1=numCase1+1
+            idz = idz - 1
+            maxLevelCell(iCell) = idz
+
+         ! do not alter the number of vert levels
+         else
+            numCase3=numCase3+1
+            maxLevelCell(iCell)=idz
+         end if
+
+         ! find the sum of the restingThicknesses
+         wc_thickness = 0d0
+         do iVertLevel = 1,maxLevelCell(iCell)
+            wc_thickness = wc_thickness + restingThickness(iVertLevel,iCell)
+         end do
+
+         delta_z = wc_thickness - bottomDepth(iCell)
+         restingThickness(idz,iCell) = restingThickness(idz,iCell) - delta_z
+
+         ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
+         ! sum(layerThickness) should equal bottomDepth+ssh
+         layerThickness(idz,iCell) = restingThickness(idz,iCell)
+
+
+      end do
+      !---------------------------check---------------------------------!
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "before fixing:"
+      write(6,*) "numCase1=",numCase1
+      write(6,*) "numCase2=",numCase2
+      write(6,*) "numCase3=",numCase3
+      write(6,*) "numConsistent=",numConsistent
+      write(6,*) "numInConsistent=",numInconsistent
+      write(6,*) ""
+      write(6,*) ""
+      numCase1=numInConsistent
+      numConsistent=0
+      numInConsistent=0
+      numCase2=0
+      numCase3=0
+      delta_z=0d0
+      do iCell = 1,nCellsAll
+
+         ! find the sum of the restingThicknesses
+         wc_thickness = 0d0
+         do iVertLevel = 1,maxLevelCell(iCell)
+            wc_thickness = wc_thickness + restingThickness(iVertLevel,iCell)
+         end do
+
+         ! check if the sum of the layer thicknesses is consistent with the bottom depth
+         if ( wc_thickness .EQ. bottomDepth(iCell) ) then
+            numConsistent=numConsistent+1
+            cycle
+         end if
+         delta_z=max(delta_z,abs(wc_thickness-bottomDepth(iCell)))
+         numInconsistent=numInconsistent+1
+
+      end do
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "after fixing:"
+      write(6,*) "numFixed=",ABS(numCase1-numInconsistent)
+      write(6,*) "numConsistent=",numConsistent
+      write(6,*) "numInConsistent=",numInconsistent
+      write(6,*) "maxdiff=",delta_z
+      write(6,*) ""
+      write(6,*) ""
+      !---------------------------check---------------------------------!
+
+      ! update maxLevelEdgeTop, maxLevelEdgeBot, maxLevelVertexTop, maxLevelVertexBot, etc.
+      ! maxLevelEdgeTop is the minimum (shallowest) of surrounding cells
+      do iEdge = 1, nEdgesAll
+         maxLevelEdgeTop(iEdge) = &
+            min( maxLevelCell(cellsOnEdge(1,iEdge)), &
+                 maxLevelCell(cellsOnEdge(2,iEdge)) )
+      end do
+      maxLevelEdgeTop(nEdgesAll+1) = 0
+
+      ! maxLevelEdgeBot is the maximum (deepest) of surrounding cells
+      do iEdge = 1, nEdgesAll
+         maxLevelEdgeBot(iEdge) = &
+            max( maxLevelCell(cellsOnEdge(1,iEdge)), &
+                 maxLevelCell(cellsOnEdge(2,iEdge)) )
+      end do
+      maxLevelEdgeBot(nEdgesAll+1) = 0
+
+      ! maxLevelVertexBot is the maximum (deepest) of surrounding cells
+      do iVertex = 1,nVerticesAll
+         maxLevelVertexBot(iVertex) = maxLevelCell(cellsOnVertex(1,iVertex))
+         do kk = 2, vertexDegree
+            maxLevelVertexBot(iVertex) = &
+               max( maxLevelVertexBot(iVertex), &
+                    maxLevelCell(cellsOnVertex(kk,iVertex)))
+         end do
+      end do
+      maxLevelVertexBot(nVerticesAll+1) = 0
+
+      ! maxLevelVertexTop is the minimum (shallowest) of surrounding cells
+      do iVertex = 1,nVerticesAll
+         maxLevelVertexTop(iVertex) = maxLevelCell(cellsOnVertex(1,iVertex))
+         do kk = 2, vertexDegree
+            maxLevelVertexTop(iVertex) = &
+               min( maxLevelVertexTop(iVertex), &
+                    maxLevelCell(cellsOnVertex(kk,iVertex)))
+         end do
+      end do
+      maxLevelVertexTop(nVerticesAll+1) = 0
+
+      block_ptr => block_ptr % next
+    end do
+
+#endif
+    end subroutine ocn_spatial_mode_splitting_update_vertical_grid!}}}
+
 
 !***********************************************************************
 !
@@ -1198,7 +1506,7 @@ contains
         do iCell = 1,nCellsSolve_bc
             bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
             bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
-        enddo
+        end do
 
         ! perform remapping
         totalNumVals=2*nCellsSolve_bc
@@ -1223,7 +1531,7 @@ contains
                                                    bc2btr_weights_identifier)
 
         block_ptr => block_ptr % next
-    enddo
+    end do
 
     !--------------------------------------------------------------------
     ! remap barotropicForcing to barotropic domain
@@ -1269,7 +1577,7 @@ contains
         do iCell = 1,nCellsSolve_btr
            barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
            barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
-        enddo
+        end do
 
         ! perform halo exchange
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
@@ -1287,7 +1595,7 @@ contains
             barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
                                            cos(angleEdge_btr(iEdge))*zonal_edge + &
                                            sin(angleEdge_btr(iEdge))*meridional_edge
-        enddo
+        end do
 
         call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
         call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_btr)
@@ -1299,10 +1607,12 @@ contains
            elseif (cell2.lt.1.OR.cell2.gt.nCellsAll_btr) then
               barotropicForcing_btr(iEdge)=0d0
            endif
-        enddo
+        end do
+        
+        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcing')
 
         block_ptr => block_ptr % next
-    enddo
+    end do
 #endif
     end subroutine ocn_spatial_mode_splitting_bc2btr_remapping!}}}
 
@@ -1432,7 +1742,7 @@ contains
         do iCell = 1,nCellsSolve_btr
             btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
             btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        enddo
+        end do
 
         ! perform remapping
         totalNumVals=2*nCellsSolve_btr
@@ -1457,7 +1767,7 @@ contains
                                                    btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
-    enddo
+    end do
 
     !--------------------------------------------------------------------
     ! remap barotropicThicknessFlux to baroclinic domain
@@ -1504,7 +1814,7 @@ contains
         do iCell = 1,nCellsSolve_bc
             barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
             barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-        enddo
+        end do
 
         ! exchange halos
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
@@ -1522,10 +1832,12 @@ contains
            barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
                                             cos(angleEdge_bc(iEdge))*zonal_edge + &
                                             sin(angleEdge_bc(iEdge))*meridional_edge
-        enddo
+        end do
+
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
 
         block_ptr => block_ptr % next
-    enddo
+    end do
 #endif
     end subroutine ocn_spatial_mode_splitting_btr2bc_remapping!}}}
 
@@ -1873,10 +2185,10 @@ contains
 
         do iCell = 1, nCellsAll_btr
            sshNew_btr(iCell) = sshCur_btr(iCell)
-        enddo
+        end do
 
         block_ptr => block_ptr % next
-    enddo
+    end do
 !-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_time_int_split_setup_btr !}}}
