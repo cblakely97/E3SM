@@ -466,13 +466,13 @@ contains
     ! remap bottomDepth from barotropic to baroclinic domain
     !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
 
     !--------------------------------------------------------------------
     ! update the vertical grid on the baroclinic domain
     !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_update_vertical_grid(domain)
+    !call ocn_spatial_mode_splitting_update_vertical_grid(domain)
 
 #endif
     !--------------------------------------------------------------------
