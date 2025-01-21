@@ -159,6 +159,7 @@ contains
         kmax = maxLevelEdgeTop(iEdge)
         do k = minLevelEdgeBot(iEdge), kmax
            zBot = zTop - layerThickEdgeMean(k,iEdge)
+
            attDepth = max(zBot/attCoeff, maxAttDepth)
 
            transCoeffBot = exp(attDepth)

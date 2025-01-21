@@ -220,7 +220,7 @@ contains
            endif
 
            ! Determine maxLevelCell based on bottomDepth and refBottomDepth
-           ! Also set botomDepth based on refBottomDepth, since
+           ! Also set bottomDepth based on refBottomDepth, since
            ! above bottomDepth was set with continuous analytical functions,
            ! and needs to be discrete
            if (maxLevelCell(iCell) > 0) then

@@ -38,7 +38,8 @@ module ocn_spatial_mode_splitting
     use mpas_vector_operations
 
     use ocn_diagnostics_variables
-    use ocn_mesh, only : ocn_meshCreate, ocn_meshDestroy
+    use ocn_diagnostics, only : ocn_diagnostic_solve_layerThicknessEdge
+    use ocn_mesh
     use ocn_constants
     use ocn_config
 
@@ -465,13 +466,13 @@ contains
     ! remap bottomDepth from barotropic to baroclinic domain
     !--------------------------------------------------------------------
 
-    !call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+    call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
 
     !--------------------------------------------------------------------
     ! update the vertical grid on the baroclinic domain
     !--------------------------------------------------------------------
 
-    !call ocn_spatial_mode_splitting_update_vertical_grid(domain)
+    call ocn_spatial_mode_splitting_update_vertical_grid(domain)
 
 #endif
     !--------------------------------------------------------------------
@@ -1011,11 +1012,6 @@ contains
 
        ! get bottomDepth from baroclinic domain
        call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_bc)
-       write(6,*) ""
-       write(6,*) ""
-       write(6,*) "MAXVAL(bottomDepth_bc) = ",MAXVAL(bottomDepth_bc)
-       write(6,*) ""
-       write(6,*) ""
 
        block_ptr => block_ptr % next
     end do 
@@ -1033,11 +1029,6 @@ contains
 
        ! get bottomDepth from baroclinic domain
        call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_btr)
-       write(6,*) ""
-       write(6,*) ""
-       write(6,*) "MAXVAL(bottomDepth_btr) = ",MAXVAL(bottomDepth_btr)
-       write(6,*) ""
-       write(6,*) ""
 
        block_ptr => block_ptr % next
     end do 
@@ -1076,12 +1067,6 @@ contains
                                      entity_type,&
                                      bottomDepth_bc)
     call errorout(ierr,'failed to get bottomDepth_bc')
-    write(6,*) ""
-    write(6,*) ""
-    write(6,*) "MAXVAL(bottomDepth_bc) = ",MAXVAL(bottomDepth_bc)
-    write(6,*) ""
-    write(6,*) ""
-
 
 #endif
     end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
@@ -1129,24 +1114,23 @@ contains
                         nVerticesAll, vertexDegree
 
     ! variable pointers from mesh pool
-    real (kind=RKIND), dimension(:), pointer :: bottomDepth
-    real (kind=RKIND), dimension(:), pointer :: refBottomDepth
-    real (kind=RKIND), dimension(:), pointer :: refBottomDepthTopOfCell
-    integer, dimension(:), pointer :: maxLevelCell
-    integer, dimension(:), pointer :: maxLevelEdgeTop
-    integer, dimension(:), pointer :: maxLevelEdgeBot
-    integer, dimension(:), pointer :: maxLevelVertexTop
-    integer, dimension(:), pointer :: maxLevelVertexBot
-    integer, dimension(:,:), pointer :: cellsOnEdge
-    integer, dimension(:,:), pointer :: cellsOnVertex
+!    real (kind=RKIND), dimension(:), pointer :: bottomDepth
+!    real (kind=RKIND), dimension(:), pointer :: refBottomDepth
+!    real (kind=RKIND), dimension(:), pointer :: refBottomDepthTopOfCell
+!    integer, dimension(:), pointer :: maxLevelCell
+!    integer, dimension(:), pointer :: maxLevelEdgeTop
+!    integer, dimension(:), pointer :: maxLevelEdgeBot
+!    integer, dimension(:), pointer :: maxLevelVertexTop
+!    integer, dimension(:), pointer :: maxLevelVertexBot
+!    integer, dimension(:,:), pointer :: cellsOnEdge
+!    integer, dimension(:,:), pointer :: cellsOnVertex
 
     ! variable pointers from verticalMesh pool
     real (kind=RKIND), dimension(:,:), pointer :: restingThickness
-    real (kind=RKIND), dimension(:), pointer :: refZMid
-    real (kind=RKIND), dimension(:), pointer :: refLayerThickness
 
     ! variable pointers from state pool
     real (kind=RKIND), dimension(:,:), pointer :: layerThickness
+    real (kind=RKIND), dimension(:,:), pointer :: normalVelocity
     real (kind=RKIND), dimension(:), pointer :: ssh_bc
 
     ! local work variables
@@ -1184,33 +1168,29 @@ contains
       call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree)
 
       ! get mesh pool variables
-      call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth)
-      call mpas_pool_get_array(meshPool, 'refBottomDepth', refBottomDepth)
-      call mpas_pool_get_array(meshPool, 'refBottomDepthTopOfCell', refBottomDepthTopOfCell)
-      call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell)
-      call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', maxLevelEdgeTop)
-      call mpas_pool_get_array(meshPool, 'maxLevelEdgeBot', maxLevelEdgeBot)
-      call mpas_pool_get_array(meshPool, 'maxLevelVertexTop', maxLevelVertexTop)
-      call mpas_pool_get_array(meshPool, 'maxLevelVertexBot', maxLevelVertexBot)
-      call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge)
-      call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex)
+!      call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth)
+!      call mpas_pool_get_array(meshPool, 'refBottomDepth', refBottomDepth)
+!      call mpas_pool_get_array(meshPool, 'refBottomDepthTopOfCell', refBottomDepthTopOfCell)
+!      call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell)
+!      call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', maxLevelEdgeTop)
+!      call mpas_pool_get_array(meshPool, 'maxLevelEdgeBot', maxLevelEdgeBot)
+!      call mpas_pool_get_array(meshPool, 'maxLevelVertexTop', maxLevelVertexTop)
+!      call mpas_pool_get_array(meshPool, 'maxLevelVertexBot', maxLevelVertexBot)
+!      call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge)
+!      call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex)
 
       ! get verticalMesh pool variables
       call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness)
-      call mpas_pool_get_array(verticalMeshPool, 'refZMid', refZMid)
-      call mpas_pool_get_array(verticalMeshPool, 'refLayerThickness', refLayerThickness)
       
       ! get state pool variables
       call mpas_pool_get_array(statePool, 'layerThickness', layerThickness, 1)
+      call mpas_pool_get_array(statePool, 'normalVelocity', normalVelocity, 1)
       call mpas_pool_get_array(statePool, 'ssh', ssh_bc, 1)
 
       ! get new maximum bottomDepth and make sure it matches refBottomDepth. By this I mean that we
       ! need refBottomDepth(n-1) to be greater than or equal to the maximum bottom depth
       maxBottomDepth=MAXVAL(bottomDepth)
       if (maxBottomDepth .GT. refBottomDepth(nVertLevels)) then
-         write(6,*) "new max depth is too deep"
-         write(6,*) "maxBottomDepth=",maxBottomDepth
-         write(6,*) "refBottomDepth(nVertLevels)=",refBottomDepth(nVertLevels)
          call mpas_log_write('new max(bottomDepth) > refBotomDepth(nVertLevels)',MPAS_LOG_CRIT)
       endif
 
@@ -1277,8 +1257,9 @@ contains
 
          ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
          ! sum(layerThickness) should equal bottomDepth+ssh
-         layerThickness(idz,iCell) = restingThickness(idz,iCell)
-
+         do iVertLevel = 1,maxLevelCell(iCell)
+            layerThickness(iVertLevel,iCell) = restingThickness(iVertLevel,iCell)
+         end do
 
       end do
       !---------------------------check---------------------------------!
@@ -1364,6 +1345,10 @@ contains
          end do
       end do
       maxLevelVertexTop(nVerticesAll+1) = 0
+
+      ! update layerThicknessEdge
+      call ocn_diagnostic_solve_layerThicknessEdge(normalVelocity,layerThickness,&
+                                                   restingThickness)
 
       block_ptr => block_ptr % next
     end do
