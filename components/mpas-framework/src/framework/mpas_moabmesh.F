@@ -24,7 +24,7 @@ module mpas_moabmesh
   return
   end subroutine
   
-  subroutine init_moab_mpas(domain, ext_comp_id, pidmoab)
+  subroutine init_moab_mpas(domain, ext_comp_id, pidmoab, c_comm)
     use iMOAB, only : iMOAB_RegisterApplication, &
      iMOAB_CreateVertices, iMOAB_CreateElements, &
      iMOAB_ResolveSharedEntities, iMOAB_DetermineGhostEntities, &
@@ -32,7 +32,7 @@ module mpas_moabmesh
      iMOAB_UpdateMeshInfo, iMOAB_SetDoubleTagStorage
 
     type (domain_type), intent(inout) :: domain
-    integer , intent(in) :: ext_comp_id
+    integer , intent(in) :: ext_comp_id, c_comm
     integer , Intent(inout) :: pidmoab
 
     type (block_type), pointer :: block
@@ -49,7 +49,7 @@ module mpas_moabmesh
     real(kind=RKIND), pointer :: x_period, y_period
     integer, pointer :: nCellsSolve, nEdgesSolve, nVerticesSolve
 
-    integer :: c_comm, i1, j1, ic, lastvertex,n
+    integer :: i1, j1, ic, lastvertex,n
     character*12 appname
     integer :: ierr, num_verts_in_cells
     real(kind=RKIND), allocatable, target :: moab_vert_coords(:), data(:)
@@ -60,7 +60,6 @@ module mpas_moabmesh
     integer tagtype, numco, tag_sto_len, ent_type, tagindex, currentVertex
     real (kind=RKIND), pointer :: sphere_radius
 
-    c_comm = domain % dminfo % comm
     write(lnum,"(I0.2)")ext_comp_id
     appname = 'MPAS_MB_'//trim(lnum)//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname, c_comm, ext_comp_id, pid)

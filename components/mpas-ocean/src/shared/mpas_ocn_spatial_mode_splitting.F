@@ -195,6 +195,10 @@ contains
     integer :: nghlay = 0
     integer :: context_id
     integer :: nTags
+    ! for loading mapping weights
+    integer :: old_load=-1
+    integer :: col_or_row=-1
+    integer :: read_type=3
 
     ! End preamble
     !-----------------------------------------------------------------
@@ -388,14 +392,46 @@ contains
                                                  bcComm,&
                                                  bc2btr_weights_identifier,&
                                                  fv_method)
+    ierr=iMOAB_WriteMesh(bcXbtrOnBtrPID,&
+                        'bcXbtrOnBtr.h5m'//C_NULL_CHAR,&
+                        'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+    ierr=iMOAB_WriteMappingWeightsToFile(bcXbtrOnBtrPID,&
+                        bc2btr_weights_identifier,&
+                        'bc2btr_weights_out.nc'//C_NULL_CHAR)
 
     ! barotropic => baroclinic
     btr2bc_weights_identifier='btr2bc'//C_NULL_CHAR
     fv_method=''//C_NULL_CHAR ! conservative
-    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
-                                                 bcComm,&
-                                                 btr2bc_weights_identifier,&
-                                                 fv_method)
+    write(6,*) ""
+    write(6,*) ""
+    write(6,*) "about to load mapping weights"
+    write(6,*) ""
+    write(6,*) ""
+    ierr=iMOAB_LoadMappingWeightsFromFile(btrXbcOnBcPID,&
+                                          btrOnBcPID,&
+                                          col_or_row,&
+                                          read_type,&
+                                          btr2bc_weights_identifier,&
+                                          'btr2bc_weights.nc'//C_NULL_CHAR)
+    call errorout(ierr,'failed to load mapping weights from file')
+    write(6,*) ""
+    write(6,*) ""
+    write(6,*) "loaded mapping weights"
+    write(6,*) "ierr=",ierr
+    write(6,*) ""
+    ierr=iMOAB_WriteMesh(btrXbcOnBcPID,&
+                        'btrXbcOnBc.h5m'//C_NULL_CHAR,&
+                        'PARALLEL=WRITE_PART'//C_NULL_CHAR)
+    call errorout(ierr,'failed to write mesh')
+    ierr=iMOAB_WriteMappingWeightsToFile(btrXbcOnBcPID,&
+                        btr2bc_weights_identifier,&
+                        'btr2bc_weights_out.nc'//C_NULL_CHAR)
+    call errorout(1,'we should fail here')
+
+!    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
+!                                                 bcComm,&
+!                                                 btr2bc_weights_identifier,&
+!                                                 fv_method)
 
     !--------------------------------------------------------------------
     ! define tags
@@ -413,9 +449,9 @@ contains
 
     ! barotropic to baroclinic fields
     btr2bcFields     = &
-      'barotropicThicknessFluxZonal_bc:barotropicThicknessFluxMeridional_bc'//C_NULL_CHAR
+      'barotropicThicknessFlux_bc'//C_NULL_CHAR
     btr2bcFields_btr = &
-      'barotropicThicknessFluxZonal_btr:barotropicThicknessFluxMeridional_btr'//C_NULL_CHAR
+      'barotropicThicknessFlux_btr'//C_NULL_CHAR
 
     ! baroclinic => barotropic
     call ocn_spatial_mode_splitting_define_tags(bcOnBcPID,&
@@ -761,9 +797,6 @@ contains
                                    tagIndex(1))
        call errorout(ierr,'failed to define tags on sourceOnSource')
 
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(sourceOnSourcePID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
     endif
 
     ! define tags on target "side"
@@ -777,10 +810,6 @@ contains
                                   tagIndex(1))
        call errorout(ierr,'failed to define tags on sourceOnTarget')
 
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(sourceOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-
        ! target fields
        ierr=iMOAB_DefineTagStorage(targetOnTargetPID,&
                                    fieldTagsProjected,&
@@ -788,10 +817,6 @@ contains
                                    nDOFS,&
                                    tagIndex(2))
        call errorout(ierr,'failed to define tags on targetOnTarget')
-
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(targetOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
 
     endif
 
@@ -1699,7 +1724,7 @@ contains
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_btr)
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
@@ -1730,8 +1755,8 @@ contains
         end do
 
         ! perform remapping
-        totalNumVals=2*nCellsSolve_btr
-        entity_type=1
+        totalNumVals=nEdgesSolve_btr
+        entity_type=2
         call ocn_spatial_mode_splitting_remap_data(btrOnBtrPID,&
                                                    btrOnBcPID,&
                                                    bcOnBcPID,&
@@ -1748,7 +1773,7 @@ contains
                                                    btr2bcFields,&
                                                    totalNumVals,&
                                                    entity_type,&
-                                                   btr2bcVar_btr,&
+                                                   barotropicThicknessFlux_btr,&
                                                    btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
@@ -1767,7 +1792,7 @@ contains
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesSolve_bc)
         call mpas_pool_get_dimension(meshpool, 'vertexDegree', vertexDegree_bc)
 
         ! get connectivity/etc.
@@ -1786,38 +1811,14 @@ contains
                                  barotropicThicknessFluxMeridional_bc)
 
         ! get remapped data from iMOAB
-        totalNumVals=2*nCellsSolve_bc
-        entity_type=1
+        totalNumVals=nEdgesSolve_bc
+        entity_type=2
         ierr = iMOAB_GetDoubleTagStorage(bcOnBcPID,&
                                          btr2bcFields,&
                                          totalNumVals,&
                                          entity_type,&
-                                         btr2bcVar)
+                                         barotropicThicknessFlux_bc)
         call errorout(ierr,"failed to get btr2bcVar from iMOAB")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_bc
-            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-        end do
-
-        ! exchange halos
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
-
-        ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0d0
-        do iEdge = 1,nEdgesSolve_bc
-           cell1 = cellsOnEdge_bc(1, iEdge)
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
-                                 barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
-                                      barotropicThicknessFluxMeridional_bc(cell2))
-           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-                                            sin(angleEdge_bc(iEdge))*meridional_edge
-        end do
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
 
