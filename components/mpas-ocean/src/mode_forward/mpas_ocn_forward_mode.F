@@ -146,6 +146,8 @@ module ocn_forward_mode
       ! local variables
       !-----------------------------------------------------------------
 
+      type(domain_type),pointer :: domain_ptr
+
       integer :: err_tmp    ! local error codes from subroutine calls
 
       real (kind=RKIND) :: &
@@ -186,14 +188,21 @@ module ocn_forward_mode
       !-----------------------------------------------------------------
       ierr = 0
 
+      ! for spatial mode splitting, since there are two domains, we want to use a pointer
+      if (domain % domainID == 0) then
+         domain_ptr => domain % core % domainlist
+      elseif (domain % domainID == 1) then
+         domain_ptr => domain % core % domainlist % next
+      endif
+
       ! Setup ocean config pool
-      call ocn_config_init(domain % configs)
+      call ocn_config_init(domain_ptr % configs)
 
       ! Set up ocean constants
-      call ocn_constants_init(domain % configs, domain % packages)
+      call ocn_constants_init(domain_ptr % configs, domain_ptr % packages)
 
       ! Set startTimeStamp based on start time of simulation clock
-      startTime = mpas_get_clock_time(domain%clock, MPAS_START_TIME, &
+      startTime = mpas_get_clock_time(domain_ptr%clock, MPAS_START_TIME, &
                                       err_tmp)
       if (err_tmp /= 0) then
          call mpas_log_write('Error getting start time in init', &
@@ -204,7 +213,7 @@ module ocn_forward_mode
 
       ! Extract block structure from domain
       ! Currently only support one block per task
-      block => domain % blocklist
+      block => domain_ptr % blocklist
 
       !-----------------------------------------------------------------
       ! Initialize data from external file input
@@ -212,7 +221,7 @@ module ocn_forward_mode
 
       ! Read mesh data for model
       call mpas_timer_start('io_read')
-      call MPAS_stream_mgr_read(domain%streamManager, streamID='mesh', &
+      call MPAS_stream_mgr_read(domain_ptr%streamManager, streamID='mesh', &
                              whence=MPAS_STREAM_NEAREST, ierr=err_tmp)
       if (err_tmp /= 0) then
          call mpas_log_write('Error reading mesh in init', &
@@ -223,16 +232,16 @@ module ocn_forward_mode
       ! Read initial state from either restart or init condition file
       if ( config_do_restart ) then
          if ( config_read_nearest_restart ) then
-            call MPAS_stream_mgr_read(domain%streamManager, &
+            call MPAS_stream_mgr_read(domain_ptr%streamManager, &
                                       streamID='restart', &
                                       whence=MPAS_STREAM_NEAREST, &
                                       ierr=err_tmp)
          else
-            call MPAS_stream_mgr_read(domain%streamManager, &
+            call MPAS_stream_mgr_read(domain_ptr%streamManager, &
                                       streamID='restart', ierr=err_tmp)
          end if
       else
-         call MPAS_stream_mgr_read(domain % streamManager, &
+         call MPAS_stream_mgr_read(domain_ptr % streamManager, &
                                    streamID='input', ierr=err_tmp)
       end if
       if (err_tmp /= 0) then
@@ -242,17 +251,17 @@ module ocn_forward_mode
       endif
 
       ! Read any analysis initialization
-      call ocn_analysis_bootstrap(domain, err=err_tmp)
+      call ocn_analysis_bootstrap(domain_ptr, err=err_tmp)
 
       call mpas_timer_stop('io_read')
       if (ierr /= 0) return
 
       call mpas_timer_start('reset_io_alarms')
-      call mpas_stream_mgr_reset_alarms(domain%streamManager, &
+      call mpas_stream_mgr_reset_alarms(domain_ptr%streamManager, &
                                         streamID='input', ierr=err_tmp)
-      call mpas_stream_mgr_reset_alarms(domain%streamManager, &
+      call mpas_stream_mgr_reset_alarms(domain_ptr%streamManager, &
                                       streamID='restart', ierr=err_tmp)
-      call mpas_stream_mgr_reset_alarms(domain%streamManager, &
+      call mpas_stream_mgr_reset_alarms(domain_ptr%streamManager, &
                             direction=MPAS_STREAM_OUTPUT, ierr=err_tmp)
       if (err_tmp /= 0) then
          call mpas_log_write('Error resetting io alarms in init', &
@@ -263,7 +272,7 @@ module ocn_forward_mode
 
       ! Read the remaining input streams
       call mpas_timer_start('io_read')
-      call mpas_stream_mgr_read(domain%streamManager, ierr=err_tmp)
+      call mpas_stream_mgr_read(domain_ptr%streamManager, ierr=err_tmp)
       ierr = ior(ierr, err_tmp)
       call mpas_timer_stop('io_read')
       if (ierr /= 0) &
@@ -271,7 +280,7 @@ module ocn_forward_mode
               MPAS_LOG_ERR, masterOnly=.true., flushNow=.true.)
 
       call mpas_timer_start('reset_io_alarms')
-      call mpas_stream_mgr_reset_alarms(domain%streamManager, &
+      call mpas_stream_mgr_reset_alarms(domain_ptr%streamManager, &
                        direction=MPAS_STREAM_INPUT, ierr=err_tmp)
       ierr = ior(ierr, err_tmp)
       call mpas_timer_stop('reset_io_alarms')
@@ -284,27 +293,31 @@ module ocn_forward_mode
       ! initialize iMOAB for spatial mode splitting
       if (config_spatial_mode_splitting) then
          call ocn_spatial_mode_splitting_init_moab_domain(domain)
+
+         if (domain % domainID == 0) then
+            call ocn_meshCreate(domain_ptr)
+            return
+         elseif (domain % domainID == 1) then
+            ! Create reusable halo exchange for subcycling
+            call mpas_dmpar_exch_group_create(domain_ptr, 'subcycleFields')
+            call mpas_dmpar_exch_group_add_field(domain_ptr, 'subcycleFields', &
+                                                 'sshSubcycle')
+            call mpas_dmpar_exch_group_add_field(domain_ptr, 'subcycleFields', &
+                                        'normalBarotropicVelocitySubcycle')
+            call mpas_dmpar_exch_group_build_reusable_buffers(domain_ptr, &
+                                                           'subcycleFields')
+            domain_ptr => domain % core % domainlist
+            block => domain_ptr % blocklist
+         end if
       endif
 
-      if (domain % domainID == 1) then
-         ! Create reusable halo exchange for subcycling
-         call mpas_dmpar_exch_group_create(domain, 'subcycleFields')
-         call mpas_dmpar_exch_group_add_field(domain, 'subcycleFields', &
-                                              'sshSubcycle')
-         call mpas_dmpar_exch_group_add_field(domain, 'subcycleFields', &
-                                     'normalBarotropicVelocitySubcycle')
-         call mpas_dmpar_exch_group_build_reusable_buffers(domain, &
-                                                        'subcycleFields')
-
-         return
-      end if
 
       !-----------------------------------------------------------------
       ! Initialize mesh before anything else since many depend on it
       !-----------------------------------------------------------------
 
       ! fill the ocean mesh structure
-      call ocn_meshCreate(domain)
+      call ocn_meshCreate(domain_ptr)
 
       !-----------------------------------------------------------------
       ! Initialize submodules and fields that are required by others
@@ -316,9 +329,9 @@ module ocn_forward_mode
       ierr = ior(ierr, err_tmp)
 
       ! Needed for later diagnostic_solve computations
-      call ocn_equation_of_state_init(domain, err_tmp)
+      call ocn_equation_of_state_init(domain_ptr, err_tmp)
       ierr = ior(ierr, err_tmp)
-      call ocn_diagnostics_init(domain, err_tmp)
+      call ocn_diagnostics_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
 
       if(ierr.eq.1) then
@@ -329,7 +342,7 @@ module ocn_forward_mode
       ! Initialize core
       !
 
-      timeStep = mpas_get_clock_timestep(domain % clock, ierr=err_tmp)
+      timeStep = mpas_get_clock_timestep(domain_ptr % clock, ierr=err_tmp)
       call mpas_get_timeInterval(timeStep, dt=dt)
 
       call ocn_init_routines_block(block, dt, ierr)
@@ -371,15 +384,15 @@ module ocn_forward_mode
       Time_bnds(2) = Time
 
       ! Update any mesh fields that may have been modified during init
-      call ocn_meshUpdateFields(domain)
+      call ocn_meshUpdateFields(domain_ptr)
 
       if (config_conduct_tests) then
          call mpas_timer_start("test suite")
-         call ocn_test_suite(domain,ierr)
+         call ocn_test_suite(domain_ptr,ierr)
          call mpas_timer_stop("test suite")
       endif
 
-      call ocn_analysis_init(domain, err_tmp)
+      call ocn_analysis_init(domain_ptr, err_tmp)
       ierr = ior(ierr, err_tmp)
       if(ierr.eq.1) then
           call mpas_log_write('An error was encountered while initializing ' &
@@ -389,23 +402,23 @@ module ocn_forward_mode
       if (config_use_surface_salinity_monthly_restoring) then
       !initialize the alarm for reading salinity data for restoring
       if ( config_surface_salinity_monthly_restoring_compute_interval == 'dt') then
-         alarmTimeStep = mpas_get_clock_timestep(domain % clock, err_tmp)
+         alarmTimeStep = mpas_get_clock_timestep(domain_ptr % clock, err_tmp)
          call mpas_get_timeInterval(alarmTimeStep, timeString= &
                       config_surface_salinity_monthly_restoring_compute_interval, ierr=err_tmp)
       endif
-      alarmTime = mpas_get_clock_time(domain % clock, MPAS_START_TIME, ierr=err_tmp)
+      alarmTime = mpas_get_clock_time(domain_ptr % clock, MPAS_START_TIME, ierr=err_tmp)
 
       call mpas_set_timeInterval(alarmTimeStep, timeString= &
               config_surface_salinity_monthly_restoring_compute_interval, ierr=err_tmp)
 
-      call mpas_add_clock_alarm(domain % clock, 'salinityDataReadAlarm', alarmTime, &
+      call mpas_add_clock_alarm(domain_ptr % clock, 'salinityDataReadAlarm', alarmTime, &
                 alarmTimeInterval=alarmTimeStep, ierr=err_tmp)
-      call mpas_reset_clock_alarm(domain % clock, 'salinityDataReadAlarm', ierr=err_tmp)
+      call mpas_reset_clock_alarm(domain_ptr % clock, 'salinityDataReadAlarm', ierr=err_tmp)
 
       endif
 
       ! Initialize self-attraction and loading
-      call ocn_vel_self_attraction_loading_init(domain,err_tmp)
+      call ocn_vel_self_attraction_loading_init(domain_ptr,err_tmp)
       ierr = ior(ierr, err_tmp)
 
       !-----------------------------------------------------------------
@@ -413,9 +426,9 @@ module ocn_forward_mode
       !-----------------------------------------------------------------
 
       ! add some mesh metadata to tau performance tools if enabled
-      call ocn_init_metadata(domain)
+      call ocn_init_metadata(domain_ptr)
 
-      call ocn_timestep_init(domain, dt, ierr)
+      call ocn_timestep_init(domain_ptr, dt, ierr)
       if (ierr /= 0) then
          call mpas_log_write( &
               'Error initializing ocean time integration ', &
@@ -466,7 +479,7 @@ module ocn_forward_mode
       ierr = ior(ierr, err_tmp)
       call ocn_tidal_forcing_init(err_tmp)
       ierr = ior(ierr, err_tmp)
-      call ocn_vel_tidal_potential_init(domain,err_tmp)
+      call ocn_vel_tidal_potential_init(domain_ptr,err_tmp)
       ierr = ior(ierr, err_tmp)
       call ocn_forcing_init(err_tmp)
       ierr = ior(ierr,err_tmp)
@@ -480,29 +493,29 @@ module ocn_forward_mode
       ! Initialize tracer tendencies
       call ocn_tracer_hmix_init(err_tmp)
       ierr = ior(ierr, err_tmp)
-      call ocn_tracer_hmix_redi_init(domain,err_tmp)
+      call ocn_tracer_hmix_redi_init(domain_ptr,err_tmp)
       ierr = ior(ierr, err_tmp)
       call ocn_tracer_surface_flux_init(err_tmp)
       ierr = ior(ierr, err_tmp)
       call ocn_tracer_advection_init(err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_short_wave_absorption_init(domain,err_tmp)
+      call ocn_tracer_short_wave_absorption_init(domain_ptr,err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_gm_init(domain, err_tmp)
+      call ocn_gm_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
       call ocn_submesoscale_init(err_tmp)
       ierr = ior(ierr,err_tmp)
       call ocn_tracer_nonlocalflux_init(err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_ecosys_init(domain, err_tmp)
+      call ocn_tracer_ecosys_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_DMS_init(domain, err_tmp)
+      call ocn_tracer_DMS_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_MacroMolecules_init(domain, err_tmp)
+      call ocn_tracer_MacroMolecules_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_ideal_age_init(domain, err_tmp)
+      call ocn_tracer_ideal_age_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_tracer_CFC_init(domain, err_tmp)
+      call ocn_tracer_CFC_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
       if (ierr /= 0) then
          call mpas_log_write( &
@@ -512,7 +525,7 @@ module ocn_forward_mode
       endif
 
       ! Initialize other modules
-      call ocn_vmix_init(domain, err_tmp)
+      call ocn_vmix_init(domain_ptr, err_tmp)
       ierr = ior(ierr, err_tmp)
       call ocn_tendency_init(err_tmp)
       ierr = ior(ierr,err_tmp)
@@ -521,7 +534,7 @@ module ocn_forward_mode
          call ocn_vertical_remap_init(err_tmp)
       call ocn_stokes_drift_init(err_tmp)
       ierr = ior(ierr,err_tmp)
-      call ocn_manufactured_solution_init(domain, err_tmp)
+      call ocn_manufactured_solution_init(domain_ptr, err_tmp)
       ierr = ior(ierr,err_tmp)
 
 

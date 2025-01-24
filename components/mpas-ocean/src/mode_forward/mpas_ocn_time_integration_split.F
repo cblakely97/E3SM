@@ -289,6 +289,8 @@ module ocn_time_integration_split
 
       ! variables for spatial mode splitting
       type (domain_type), pointer :: domain_btr, domain_ptr         ! barotropic domain pointer
+      type (mpas_pool_type), pointer :: meshPool_bc, meshPool_btr
+      real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
 
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
@@ -339,6 +341,12 @@ module ocn_time_integration_split
 
         ! initialize split-explicit variables for first iteration
         call ocn_spatial_mode_splitting_time_int_split_setup_btr(domain_btr)
+
+        ! get bottom depth from both domains
+        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool_bc)
+        call mpas_pool_get_array(meshPool_bc, 'bottomDepth', bottomDepth_bc)
+        call mpas_pool_get_subpool(domain_btr % blocklist % structs, 'mesh', meshPool_btr)
+        call mpas_pool_get_array(meshPool_btr, 'bottomDepth', bottomDepth_btr)
 
       endif
 
@@ -904,7 +912,7 @@ module ocn_time_integration_split
               cell2 = cellsOnEdge(2,iEdge)
 
               ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
-              baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
+              baroclinicThickness(iEdge)=MIN(bottomDepth_btr(cell1),bottomDepth_btr(cell2))
            enddo
 
          endif
