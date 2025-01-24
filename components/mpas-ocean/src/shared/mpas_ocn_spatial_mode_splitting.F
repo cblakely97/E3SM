@@ -1033,9 +1033,6 @@ contains
        block_ptr => block_ptr % next
     end do 
 
-    ! exchange halos just in case (this shouldn't be necessary)
-    call mpas_dmpar_field_halo_exch(domain_btr,'bottomDepth')
-
     ! remap bathymetry
     totalNumVals=nCellsSolve_btr
     entity_type=1
@@ -1059,6 +1056,7 @@ contains
                                                bottomDepth_weights_identifier)
 
     ! store remapped bathymetry in bottomDepth_bc
+    bottomDepth_bc(:)=-9999d0
     totalNumVals=nCellsSolve_bc
     entity_type=1
     ierr = iMOAB_GetDoubleTagStorage(bcOnBcPID,&
@@ -1069,7 +1067,7 @@ contains
     call errorout(ierr,'failed to get bottomDepth_bc')
 
     ! halo exchange new bathy
-    call mpas_dmpar_field_halo_exch(domain,'bottomDepth')
+    call mpas_dmpar_field_halo_exch(domain_bc,'bottomDepth')
 
 #endif
     end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
@@ -1109,7 +1107,10 @@ contains
     type (block_type), pointer :: block_ptr
 
     ! pools
-    type(mpas_pool_type), pointer :: verticalMeshPool, statePool
+    type(mpas_pool_type), pointer :: meshPool, verticalMeshPool, statePool
+
+    ! dimensions
+    integer, pointer :: nCellsSolve_bc, nEdgesSolve_bc
 
     ! variable pointers from verticalMesh pool
     real (kind=RKIND), dimension(:,:), pointer :: restingThickness
@@ -1143,8 +1144,13 @@ contains
     do while(associated(block_ptr))
 
       ! get pools
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
       call mpas_pool_get_subpool(block_ptr % structs, 'verticalMesh', verticalMeshPool)
       call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+      ! get dimensions
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+      call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
       ! get verticalMesh pool variables
       call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness)
@@ -1162,7 +1168,7 @@ contains
       endif
 
       ! loop over each cell and update as needed
-      do iCell = 1,nCellsAll
+      do iCell = 1,nCellsSolve_bc
 
          ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
          ! sum(layerThickness) should equal bottomDepth+ssh
@@ -1220,10 +1226,10 @@ contains
       end do
 
       ! perform halo exchange for maxLevelCell
-      call mpas_dmpar_field_halo_exch(domain,'maxLevelCell')
-      call mpas_dmpar_field_halo_exch(domain,'restingThickness')
-      call mpas_dmpar_field_halo_exch(domain,'layerThickness',timeLevel=1)
-      call mpas_dmpar_field_halo_exch(domain,'normalVelocity',timeLevel=1)
+      call mpas_dmpar_field_halo_exch(domain_bc,'maxLevelCell')
+      call mpas_dmpar_field_halo_exch(domain_bc,'restingThickness')
+      call mpas_dmpar_field_halo_exch(domain_bc,'layerThickness',timeLevel=1)
+      call mpas_dmpar_field_halo_exch(domain_bc,'normalVelocity',timeLevel=1)
 
       ! call meshDestroy (will be recreated in the init routines)
       call ocn_meshDestroy(ierr)
