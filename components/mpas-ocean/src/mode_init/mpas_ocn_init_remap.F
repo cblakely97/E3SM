@@ -27,6 +27,7 @@ module ocn_init_remap
    use mpas_dmpar
 
    use ocn_constants
+   use ocn_mesh
    use ocn_config
    use ocn_init_vertical_grids
    use ocn_init_cell_markers
@@ -90,6 +91,8 @@ contains
       integer :: iCell, iEdge, k, idx
       real (kind=RKIND) :: yMin, yMax, xMin, xMax, dcEdgeMin, dcEdgeMinGlobal
       real (kind=RKIND) :: yMinGlobal, yMaxGlobal, yMidGlobal, xMinGlobal, xMaxGlobal
+      real (kind=RKIND) :: sphereRadius
+      real (kind=RKIND), dimension(:), pointer :: interfaceLocations
 
       ! Define dimension pointers
       integer, pointer :: nCellsSolve, nEdgesSolve, nVertLevels, nVertLevelsP1
@@ -102,7 +105,7 @@ contains
       real (kind=RKIND), dimension(:), pointer :: xCell, yCell,refBottomDepth, dcEdge
       integer, dimension(:,:), pointer :: cellsOnEdge
       real (kind=RKIND), dimension(:), pointer :: angleEdge
-
+      real (kind=RKIND), pointer :: sphere_radius
       real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
                                              barotropicForcingMeridional_bc
       real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
@@ -113,14 +116,7 @@ contains
 
       if(config_init_configuration .ne. trim('remap')) return
 
-      ! cpb
       domain_btr => domain % next
-      ! end cpb
-
-      ! Determine vertical grid for configuration
-      call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
-      call mpas_pool_get_dimension(meshPool, 'nVertLevelsP1', nVertLevelsP1)
-      call mpas_pool_get_config(meshPool, 'on_a_sphere', on_a_sphere)
 
       !--------------------------------------------------------------------
       ! Use this section to make boundaries non-periodic
@@ -209,15 +205,16 @@ contains
       ! apply an analytical field to test the remapping
       !----------------------------------------------------------------------   
 
-      call ocn_init_remap_analytical_field(domain_btr)
-
+      !call ocn_init_remap_analytical_field(domain_btr)
 
       !--------------------------------------------------------------------
       ! initialize moab for spatial mode splitting
       !--------------------------------------------------------------------
 
       call ocn_spatial_mode_splitting_init_moab_domain(domain)
+      call ocn_meshCreate(domain)
       call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
+      call ocn_meshCreate(domain)
 
       !--------------------------------------------------------------------
       ! baroclinic => barotropic
@@ -228,7 +225,6 @@ contains
       !--------------------------------------------------------------------
       ! barotropic => baroclinic
       !--------------------------------------------------------------------
-
       call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
       !--------------------------------------------------------------------

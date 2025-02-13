@@ -1111,9 +1111,15 @@ contains
 
     ! dimensions
     integer, pointer :: nCellsSolve_bc, nEdgesSolve_bc
+    integer, pointer :: nVertLevels_bc
+
+    ! variable pointers from mesh pool
+    integer, dimension(:), pointer :: minLevelCell_bc, maxLevelCell_bc
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc
+    real (kind=RKIND), dimension(:), pointer :: refBottomDepth_bc
 
     ! variable pointers from verticalMesh pool
-    real (kind=RKIND), dimension(:,:), pointer :: restingThickness
+    real (kind=RKIND), dimension(:,:), pointer :: restingThickness_bc
 
     ! variable pointers from state pool
     real (kind=RKIND), dimension(:,:), pointer :: layerThickness_bc
@@ -1149,11 +1155,18 @@ contains
       call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
       ! get dimensions
+      call mpas_pool_get_dimension(meshPool, 'nVertLevels', nVertLevels_bc)
       call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
+      ! get mesh pool variables
+      call mpas_pool_get_array(meshPool, 'minLevelCell', minLevelCell_bc)
+      call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell_bc)
+      call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth_bc)
+      call mpas_pool_get_array(meshPool, 'refBottomDepth', refBottomDepth_bc)
+
       ! get verticalMesh pool variables
-      call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness)
+      call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness_bc)
       
       ! get state pool variables
       call mpas_pool_get_array(statePool, 'layerThickness', layerThickness_bc, 1)
@@ -1161,9 +1174,9 @@ contains
       call mpas_pool_get_array(statePool, 'ssh', ssh_bc, 1)
 
       ! get new maximum bottomDepth and make sure it matches refBottomDepth. By this I mean that we
-      ! need refBottomDepth(n-1) to be greater than or equal to the maximum bottom depth
-      maxBottomDepth=MAXVAL(bottomDepth)
-      if (maxBottomDepth .GT. refBottomDepth(nVertLevels)) then
+      ! need refBottomDepth_bc(n-1) to be greater than or equal to the maximum bottom depth
+      maxBottomDepth=MAXVAL(bottomDepth_bc)
+      if (maxBottomDepth .GT. refBottomDepth_bc(nVertLevels_bc)) then
          call mpas_log_write('new max(bottomDepth) > refBotomDepth(nVertLevels)',MPAS_LOG_CRIT)
       endif
 
@@ -1173,14 +1186,14 @@ contains
          ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
          ! sum(layerThickness) should equal bottomDepth+ssh
 
-         ! find the sum of the restingThicknesses
-         wc_thickness = restingThickness(minLevelCell(iCell),iCell)
-         do iVertLevel = minLevelCell(iCell)+1,maxLevelCell(iCell)
-            wc_thickness = wc_thickness + restingThickness(iVertLevel,iCell)
+         ! find the sum of the restingThickness_bces
+         wc_thickness = restingThickness_bc(minLevelCell_bc(iCell),iCell)
+         do iVertLevel = minLevelCell_bc(iCell)+1,maxLevelCell_bc(iCell)
+            wc_thickness = wc_thickness + restingThickness_bc(iVertLevel,iCell)
          end do
 
          ! check if the sum of the layer thicknesses is consistent with the bottom depth
-         if ( wc_thickness .EQ. bottomDepth(iCell) ) then
+         if ( wc_thickness .EQ. bottomDepth_bc(iCell) ) then
             cycle
          end if
 
@@ -1190,36 +1203,36 @@ contains
          ! find which level our bottom depth resides in
          ! NOTE: because I do this, we will only ever need to remove a layer. Adding a layer will
          ! never be required
-         do iVertLevel = 1,nVertLevels
-            if ( refBottomDepth(iVertLevel) .GE. bottomDepth(iCell) ) then
+         do iVertLevel = 1,nVertLevels_bc
+            if ( refBottomDepth_bc(iVertLevel) .GE. bottomDepth_bc(iCell) ) then
                idz = iVertLevel
                exit
             end if
          end do
 
-         ! find min depth (refBottomDepth - 50% of layer thickness)
-         minBottomDepth = 0.5d0 * ( refBottomDepth(idz-1) + refBottomDepth(idz) )
+         ! find min depth (refBottomDepth_bc - 50% of layer thickness)
+         minBottomDepth = 0.5d0 * ( refBottomDepth_bc(idz-1) + refBottomDepth_bc(idz) )
 
-         ! if bottomDepth <= minBottomDepth, subtract a layer
-         if ( bottomDepth(iCell) .LT. minBottomDepth ) then
+         ! if bottomDepth_bc <= minBottomDepth, subtract a layer
+         if ( bottomDepth_bc(iCell) .LT. minBottomDepth ) then
             idz = idz - 1
          end if
 
-         maxLevelCell(iCell)=idz
+         maxLevelCell_bc(iCell)=idz
 
-         ! find the sum of the restingThicknesses
-         wc_thickness = restingThickness(minLevelCell(iCell),iCell)
-         do iVertLevel = minLevelCell(iCell)+1,maxLevelCell(iCell)
-            wc_thickness = wc_thickness + restingThickness(iVertLevel,iCell)
+         ! find the sum of the restingThickness_bces
+         wc_thickness = restingThickness_bc(minLevelCell_bc(iCell),iCell)
+         do iVertLevel = minLevelCell_bc(iCell)+1,maxLevelCell_bc(iCell)
+            wc_thickness = wc_thickness + restingThickness_bc(iVertLevel,iCell)
          end do
 
-         delta_z = wc_thickness - bottomDepth(iCell)
-         restingThickness(idz,iCell) = restingThickness(idz,iCell) - delta_z
+         delta_z = wc_thickness - bottomDepth_bc(iCell)
+         restingThickness_bc(idz,iCell) = restingThickness_bc(idz,iCell) - delta_z
 
          ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
-         ! sum(layerThickness) should equal bottomDepth+ssh
-         do iVertLevel = 1,nVertLevels
-            layerThickness_bc(iVertLevel,iCell) = restingThickness(iVertLevel,iCell)
+         ! sum(layerThickness) should equal bottomDepth_bc+ssh
+         do iVertLevel = 1,nVertLevels_bc
+            layerThickness_bc(iVertLevel,iCell) = restingThickness_bc(iVertLevel,iCell)
             normalVelocity_bc(iVertLevel,iCell) = 0d0
          end do
 

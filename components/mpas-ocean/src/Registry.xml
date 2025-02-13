@@ -1802,8 +1802,8 @@
 			<var name="bottomDepth"/>
 			<var name="minLevelCell"/>
 			<var name="maxLevelCell"/>
-			<var name="refBottomDepth" packages="forwardMode;analysisMode"/>
-			<var name="restingThickness" packages="forwardMode;analysisMode"/>
+			<var name="refBottomDepth" packages="initMode;forwardMode;analysisMode"/>
+			<var name="restingThickness" packages="initMode;forwardMode;analysisMode"/>
 		</stream>
 
 		<stream name="input"
@@ -2532,35 +2532,35 @@
 		/>
 		<var name="minLevelEdgeTop" type="integer" dimensions="nEdges"
 			 description="Index to the first edge in a column with at least one active ocean cell on either side of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelEdgeTop" type="integer" dimensions="nEdges"
 			 description="Index to the last edge in a column with active ocean cells on both sides of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelEdgeBot" type="integer" dimensions="nEdges"
 			 description="Index to the first edge in a column with active ocean cells on both sides of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelEdgeBot" type="integer" dimensions="nEdges"
 			 description="Index to the last edge in a column with at least one active ocean cell on either side of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelVertexTop" type="integer" dimensions="nVertices"
 			 description="Index to the first vertex in a column with at least one active ocean cell around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelVertexTop" type="integer" dimensions="nVertices"
 			 description="Index to the last vertex in a column with all active cells around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelVertexBot" type="integer" dimensions="nVertices"
 			 description="Index to the first vertex in a column with all active cells around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelVertexBot" type="integer" dimensions="nVertices"
 			 description="Index to the last vertex in a column with at least one active ocean cell around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="refBottomDepth" type="real" dimensions="nVertLevels" units="m"
 			 description="Reference depth of ocean for each vertical level. Used in 'z-level' type runs."
