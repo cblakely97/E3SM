@@ -79,24 +79,22 @@ module ocn_spatial_mode_splitting
     !
     !--------------------------------------------------------------------
 
-    ! mpi groups/comms. All of these span the same processors
-    integer :: bcComm, btrComm
-    integer :: bcGroup, btrGroup
+    ! mpi comm pointer and group
+    integer :: moabComm
+    integer :: moabGroup
    
     ! identifiers for moab meshes
     ! barotropic mesh identifiers
-    integer :: btrOnBtr
-    integer :: btrOnBc
-    integer :: btrXbcOnBc
+    integer :: btrGID
+    integer :: btrXbcGID
 
     ! baroclinic mesh identifiers
-    integer :: bcOnBc
-    integer :: bcOnBtr
-    integer :: bcXbtrOnBtr
+    integer :: bcGID
+    integer :: bcXbtrGID
 
     ! PID's for MOAB
-    integer,public :: btrOnBtrPID, btrOnBcPID, btrXbcOnBcPID
-    integer,public :: bcOnBcPID, bcOnBtrPID, bcXbtrOnBtrPID
+    integer,public :: btrPID, btrXbcPID
+    integer,public :: bcPID,  bcXbtrPID
 
     ! iMOAB communication variables
     character*100 :: appname
@@ -201,14 +199,12 @@ contains
     ! Begin code
     ! identifiers for moab meshes
     ! barotropic mesh identifiers
-    btrOnBtr    = 314
-    btrOnBc     = 315
-    btrXbcOnBc  = 316
+    btrGID    = 314
+    btrXbcGID  = 316
 
     ! baroclinic mesh identifiers
-    bcOnBc      = 414
-    bcOnBtr     = 415
-    bcXbtrOnBtr = 416
+    bcGID      = 414
+    bcXbtrGID = 416
 
     ! number of tags we define in this subroutine
     nTags=2
@@ -233,13 +229,13 @@ contains
        !--------------------------------------------------------------------
 
        ! get mpi communicator for baroclinic domain
-       bcComm = MPI_COMM_NULL
+       moabComm = MPI_COMM_NULL
        call mpi_comm_dup(domain % dminfo % comm, &
-                         bcComm, ierr)
-       call mpi_comm_group(bcComm, bcGroup, ierr)
+                         moabComm, ierr)
+       call mpi_comm_group(moabComm, moabGroup, ierr)
 
        ! initialize moab domain
-       call init_moab_mpas(domain, bcOnBc, bcOnBcPID, bcComm)
+       call init_moab_mpas(domain, bcGID, bcPID, moabComm)
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
@@ -272,14 +268,8 @@ contains
        ! barotropic domain
        !--------------------------------------------------------------------
 
-       ! get mpi communicator for barotropic domain
-       btrComm = MPI_COMM_NULL
-       call mpi_comm_dup(domain % dminfo % comm, &
-                         btrComm, ierr)
-       call mpi_comm_group(btrComm, btrGroup, ierr)
-
        ! initialize moab domain
-       call init_moab_mpas(domain, btrOnBtr, btrOnBtrPID, btrComm)
+       call init_moab_mpas(domain, btrGID, btrPID, moabComm)
 
        ! get mesh size for allocating local variables
        call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
@@ -311,71 +301,43 @@ contains
     ! Finish MOAB initialization
     !--------------------------------------------------------------------
 
-    ! register applications other than btrOnBtr and bcOnBc
+    ! register applications other than btrGID and bcGID
 
-    ! register baroclinic on barotropic side
-    appname = 'bcOnBtr'//C_NULL_CHAR
+    ! register baroclinic to barotropic intersection
+    appname = 'bcXbtr'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname, &
-                                     btrComm, &
-                                     bcOnBtr, &
-                                     bcOnBtrPID)
-    call errorout(ierr, "failed to register bcOnBtr application")
-
-    ! register baroclinic to barotropic intersection on baroclinic side
-    appname = 'bcXbtrOnBtr'//C_NULL_CHAR
-    ierr = iMOAB_RegisterApplication(appname, &
-                                     btrComm, &
-                                     bcXbtrOnBtr, &
-                                     bcXbtrOnBtrPID)
-    call errorout(ierr, "failed to register bcXbtrOnBtr application")
-
-    ! barotropic on baroclinic side
-    appname = 'btrOnBc'//C_NULL_CHAR
-    ierr = iMOAB_RegisterApplication(appname,&
-                                     bcComm, &
-                                     btrOnBc, &
-                                     btrOnBcPID)
-    call errorout(ierr, "failed to register btrOnBc application")
+                                     moabComm, &
+                                     bcXbtrGID, &
+                                     bcXbtrPID)
+    call errorout(ierr, "failed to register bcXbtr application")
 
     ! barotropic to baroclinic intersection on baroclinic side
-    appname = 'btrXbcOnBc'//C_NULL_CHAR
+    appname = 'btrXbc'//C_NULL_CHAR
     ierr = iMOAB_RegisterApplication(appname,&
-                                     bcComm, &
-                                     btrXbcOnBc, &
-                                     btrXbcOnBcPID)
-    call errorout(ierr, "failed to register btrXbcOnBc application")
+                                     moabComm, &
+                                     btrXbcGID, &
+                                     btrXbcPID)
+    call errorout(ierr, "failed to register btrXbc application")
 
     !--------------------------------------------------------------------
     ! calculate the mesh intersections
     !--------------------------------------------------------------------
 
     ! baroclinic => barotropic
-    call ocn_spatial_mode_splitting_calc_mesh_intersection(bcOnBcPID,&
-                                                           bcOnBtrPID,&
-                                                           btrOnBtrPID,&
-                                                           bcXbtrOnBtrPID,&
-                                                           bcOnBc,&
-                                                           bcOnBtr,&
-                                                           btrOnBtr,&
-                                                           bcXbtrOnBtr,&
-                                                           bcComm,&
-                                                           btrComm,&
-                                                           bcGroup,&
-                                                           btrGroup)
+    call ocn_spatial_mode_splitting_calc_mesh_intersection(bcPID,&
+                                                           btrPID,&
+                                                           bcXbtrPID,&
+                                                           bcGID,&
+                                                           btrGID,&
+                                                           bcXbtrGID)
 
     ! barotropic => baroclinic
-    call ocn_spatial_mode_splitting_calc_mesh_intersection(btrOnBtrPID,&
-                                                           btrOnBcPID,&
-                                                           bcOnBcPID,&
-                                                           btrXbcOnBcPID,&
-                                                           btrOnBtr,&
-                                                           btrOnBc,&
-                                                           bcOnBc,&
-                                                           btrXbcOnBc,&
-                                                           btrComm,&
-                                                           bcComm,&
-                                                           btrGroup,&
-                                                           bcGroup)
+    call ocn_spatial_mode_splitting_calc_mesh_intersection(btrPID,&
+                                                           bcPID,&
+                                                           btrXbcPID,&
+                                                           btrGID,&
+                                                           bcGID,&
+                                                           btrXbcGID)
 
     !--------------------------------------------------------------------
     ! calculate the projection weights
@@ -384,16 +346,14 @@ contains
     ! baroclinic => barotropic
     bc2btr_weights_identifier='bc2btr'//C_NULL_CHAR
     fv_method='bilin'//C_NULL_CHAR
-    call ocn_spatial_mode_splitting_calc_weights(bcXbtrOnBtrPID,&
-                                                 bcComm,&
+    call ocn_spatial_mode_splitting_calc_weights(bcXbtrPID,&
                                                  bc2btr_weights_identifier,&
                                                  fv_method)
 
     ! barotropic => baroclinic
     btr2bc_weights_identifier='btr2bc'//C_NULL_CHAR
     fv_method=''//C_NULL_CHAR ! conservative
-    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
-                                                 bcComm,&
+    call ocn_spatial_mode_splitting_calc_weights(btrXbcPID,&
                                                  btr2bc_weights_identifier,&
                                                  fv_method)
 
@@ -418,22 +378,16 @@ contains
       'barotropicThicknessFluxZonal_btr:barotropicThicknessFluxMeridional_btr'//C_NULL_CHAR
 
     ! baroclinic => barotropic
-    call ocn_spatial_mode_splitting_define_tags(bcOnBcPID,&
-                                                bcOnBtrPID,&
-                                                btrOnBtrPID,&
-                                                bcComm,&
-                                                btrComm,&
+    call ocn_spatial_mode_splitting_define_tags(bcPID,&
+                                                btrPID,&
                                                 bc2btrFields,&
                                                 bc2btrFields_btr,&
                                                 bc2btrTypes,&
                                                 bc2btrIndices)
 
     ! barotropic => baroclinic
-    call ocn_spatial_mode_splitting_define_tags(btrOnBtrPID,&
-                                                btrOnBcPID,&
-                                                bcOnBcPID,&
-                                                btrComm,&
-                                                bcComm,&
+    call ocn_spatial_mode_splitting_define_tags(btrPID,&
+                                                bcPID,&
                                                 btr2bcFields_btr,&
                                                 btr2bcFields,&
                                                 btr2bcTypes,&
@@ -444,20 +398,16 @@ contains
     ! allocate buffers
     !--------------------------------------------------------------------
 
+    ! start from here
+
     ! baroclinic to barotropic
-    call ocn_spatial_mode_splitting_allocate_buffers(bcOnBcPID,&
-                                                     bcOnBtrPID,&
-                                                     bcComm,&
-                                                     btrComm,&
+    call ocn_spatial_mode_splitting_allocate_buffers(bcPID,&
                                                      bc2btrVar,&
                                                      btr2bcVar,&
                                                      nTags)
 
     ! barotropic to baroclinic
-    call ocn_spatial_mode_splitting_allocate_buffers(btrOnBtrPID,&
-                                                     btrOnBcPID,&
-                                                     btrComm,&
-                                                     bcComm,&
+    call ocn_spatial_mode_splitting_allocate_buffers(btrPID,&
                                                      btr2bcVar_btr,&
                                                      bc2btrVar_btr,&
                                                      nTags)
@@ -491,33 +441,26 @@ contains
 !>  calculates coverage graph.
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_calc_mesh_intersection(sourceOnSourcePID,&
-                                                       sourceOnTargetPID,&
-                                                       targetOnTargetPID,&
+    subroutine ocn_spatial_mode_splitting_calc_mesh_intersection(sourcePID,&
+                                                       targetPID,&
                                                        overlapPID,&
-                                                       sourceOnSourceGID,&
-                                                       sourceOnTargetGID,&
-                                                       targetOnTargetGID,&
-                                                       overlapGID,&
-                                                       sourceComm,&
-                                                       targetComm,&
-                                                       sourceGroup,&
-                                                       targetGroup)
+                                                       sourceGID,&
+                                                       targetGID,&
+                                                       overlapGID)
 
     !-----------------------------------------------------------------
     ! input variables
     !-----------------------------------------------------------------
 
-    ! global id's
-    integer,intent(inout) :: sourceOnSourceGID, sourceOnTargetGID,&
-                             targetOnTargetGID, overlapGID
-
     ! moab PID's
-    integer,intent(inout) :: sourceOnSourcePID, SourceOnTargetPID,&
-                             targetOnTargetPID, overlapPID
+    integer,intent(inout) :: sourcePID,&
+                             targetPID,&
+                             overlapPID
 
-    ! communicators and groups
-    integer,intent(inout) :: sourceComm, targetComm, sourceGroup, targetGroup
+    ! global id's
+    integer,intent(inout) :: sourceGID,&
+                             targetGID,&
+                             overlapGID
 
     !-----------------------------------------------------------------
     ! output variables
@@ -536,51 +479,21 @@ contains
 
 #ifdef HAVE_MOAB
 
-    ! send source mesh to target domain
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_SendMesh(sourceOnSourcePID,&
-                           targetComm,&
-                           targetGroup,&
-                           sourceOnTargetGID,&
-                           partScheme)
-       call errorout(ierr,'failed to send mesh')
-    endif
-
-    ! receive mesh on target
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_ReceiveMesh(sourceOnTargetPID,&
-                              targetComm,&
-                              sourceGroup,&
-                              sourceOnSourceGID)
-       call errorout(ierr,'failed to receive mesh')
-    endif
-
-    ! free sender buffers
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_FreeSenderBuffers(sourceOnSourcePID,&
-                                    sourceOnTargetGID)
-       call errorout(ierr,'failed to free sender buffers')
-    endif
-
     ! calculate mesh intersection
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_ComputeMeshIntersectionOnSphere(sourceOnTargetPID,&
-                                                  targetOnTargetPID,&
-                                                  overlapPID)
-       call errorout(ierr,'failed to compute mesh intersection')
-    endif
+    ierr=iMOAB_ComputeMeshIntersectionOnSphere(sourcePID,&
+                                               targetPID,&
+                                               overlapPID)
+    call errorout(ierr,'failed to compute mesh intersection')
 
     ! calculate coverage graph
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_CoverageGraph(sourceComm,&
-                                sourceOnSourcePID,&
-                                sourceOnTargetPID,&
-                                overlapPID,&
-                                sourceOnSourceGID,&
-                                sourceOnTargetGID,&
-                                sourceOnTargetGID)
-       call errorout(ierr,'failed to compute coverage graph')
-    endif
+    ierr=iMOAB_CoverageGraph(moabComm,&
+                             sourcePID,&
+                             sourcePID,&
+                             overlapPID,&
+                             sourceGID,&
+                             sourceGID,&
+                             sourceGID)
+    call errorout(ierr,'failed to compute coverage graph')
 
 #endif
 
@@ -601,7 +514,6 @@ contains
 !
 !-----------------------------------------------------------------------
     subroutine ocn_spatial_mode_splitting_calc_weights(overlapPID,&
-                                                       targetComm,&
                                                        weights_identifier,&
                                                        fv_method)!{{{
 
@@ -611,9 +523,6 @@ contains
 
     ! moab PID's
     integer,intent(inout) :: overlapPID
-
-    ! target communicator
-    integer,intent(inout) :: targetComm
 
     ! remapping tags and method
     character(:),allocatable,intent(inout) :: weights_identifier,fv_method
@@ -653,24 +562,22 @@ contains
     fInverseDistanceMap=0
 
     ! calculate projection weights
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_ComputeScalarProjectionWeights(overlapPID,&
-                                                 weights_identifier,&
-                                                 discMethod,&
-                                                 discOrder,&
-                                                 discMethod,&
-                                                 discOrder,&
-                                                 fv_method,&
-                                                 fNoBubble,&
-                                                 fMonotoneTypeID,&
-                                                 fVolumetric,&
-                                                 fInverseDistanceMap,&
-                                                 fNoConserve,&
-                                                 fValidate,&
-                                                 dofTagNames,&
-                                                 dofTagNames)
-       call errorout(ierr,'unable to compute weights')
-    endif
+    ierr=iMOAB_ComputeScalarProjectionWeights(overlapPID,&
+                                              weights_identifier,&
+                                              discMethod,&
+                                              discOrder,&
+                                              discMethod,&
+                                              discOrder,&
+                                              fv_method,&
+                                              fNoBubble,&
+                                              fMonotoneTypeID,&
+                                              fVolumetric,&
+                                              fInverseDistanceMap,&
+                                              fNoConserve,&
+                                              fValidate,&
+                                              dofTagNames,&
+                                              dofTagNames)
+    call errorout(ierr,'unable to compute weights')
 
 #endif
 
@@ -688,11 +595,8 @@ contains
 !> \details
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_define_tags(sourceOnSourcePID,&
-                                                      sourceOnTargetPID,&
-                                                      targetOnTargetPID,&
-                                                      sourceComm,&
-                                                      targetComm,&
+    subroutine ocn_spatial_mode_splitting_define_tags(sourcePID,&
+                                                      targetPID,&
                                                       fieldTags,&
                                                       fieldTagsProjected,&
                                                       tagTypes,&
@@ -703,16 +607,13 @@ contains
     !-----------------------------------------------------------------
 
     ! mesh PIDs
-    integer,intent(inout) :: sourceOnSourcePID,sourceOnTargetPID,&
-                             targetOnTargetPID
+    integer,intent(inout) :: sourcePID,&
+                             targetPID
 
 
     ! tag types and indices
     integer,dimension(2),intent(inout) :: tagTypes
     integer,dimension(2),intent(inout) :: tagIndex
-
-    ! mpi communicators
-    integer,intent(inout) :: sourceComm,targetComm
 
     ! names of fields to be projected
     character(:),allocatable,intent(inout) :: fieldTags,fieldTagsProjected
@@ -728,18 +629,6 @@ contains
     ! number of degrees of freedom (always 1 for us)
     integer :: nDOFs
 
-    ! arrays to set all tags to 0
-    real (kind=RKIND), dimension(:), allocatable :: vals
-
-    ! mesh dimensions
-    integer, dimension(3) :: nverts, nelem, nblocks, nsbc, ndbc
-
-    ! number of values
-    integer :: totalNumVals
-
-    ! data type
-    integer :: dtype
-
     ! error handling
     integer :: ierr
 
@@ -750,50 +639,22 @@ contains
 #ifdef HAVE_MOAB
 
     nDOFS=1 ! 
-    dtype=1
 
-    ! define source field tags on source
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_DefineTagStorage(sourceOnSourcePID,&
-                                   fieldTags,&
-                                   tagTypes(1),&
-                                   nDOFS,&
-                                   tagIndex(1))
-       call errorout(ierr,'failed to define tags on sourceOnSource')
+    ! define tags on source
+    ierr=iMOAB_DefineTagStorage(sourcePID,&
+                                fieldTags,&
+                                tagTypes(1),&
+                                nDOFS,&
+                                tagIndex(1))
+    call errorout(ierr,'failed to define tags on source')
 
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(sourceOnSourcePID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-    endif
-
-    ! define tags on target "side"
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-
-      ! source fields on source
-      ierr=iMOAB_DefineTagStorage(sourceOnTargetPID,&
-                                  fieldTags,&
-                                  tagTypes(1),&
-                                  nDOFS,&
-                                  tagIndex(1))
-       call errorout(ierr,'failed to define tags on sourceOnTarget')
-
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(sourceOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-
-       ! target fields
-       ierr=iMOAB_DefineTagStorage(targetOnTargetPID,&
-                                   fieldTagsProjected,&
-                                   tagTypes(2),&
-                                   nDOFS,&
-                                   tagIndex(2))
-       call errorout(ierr,'failed to define tags on targetOnTarget')
-
-       ! set tags to 0
-       ierr=iMOAB_GetMeshInfo(targetOnTargetPID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-
-    endif
+    ! target fields
+    ierr=iMOAB_DefineTagStorage(targetPID,&
+                                fieldTagsProjected,&
+                                tagTypes(2),&
+                                nDOFS,&
+                                tagIndex(2))
+    call errorout(ierr,'failed to define tags on target')
 
 #endif
 
@@ -811,10 +672,7 @@ contains
 !> \details
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_allocate_buffers(sourceOnSourcePID,&
-                                                           sourceOnTargetPID,&
-                                                           sourceComm,&
-                                                           targetComm,&
+    subroutine ocn_spatial_mode_splitting_allocate_buffers(sourcePID,&
                                                            source2target,&
                                                            target2source,&
                                                            nTags)!{{{
@@ -832,10 +690,7 @@ contains
     !-----------------------------------------------------------------
 
     ! mesh PIDs
-    integer,intent(inout) :: sourceOnSourcePID,sourceOnTargetPID
-
-    ! mpi communicators
-    integer,intent(inout) :: sourceComm,targetComm
+    integer,intent(inout) :: sourcePID
 
     ! number of tags
     integer,intent(in) :: nTags
@@ -859,37 +714,16 @@ contains
     ! Begin code
 
 #ifdef HAVE_MOAB
+    ! get mesh dimensions from moab
+    ierr=iMOAB_GetMeshInfo(sourcePID,nverts,nelem,nblocks,nsbc,ndbc)
+    call errorout(ierr,'failed to retrieve mesh info (source on source)')
 
-    ! on source
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-
-       ! get mesh dimensions from moab
-       ierr=iMOAB_GetMeshInfo(sourceOnSourcePID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-
-       ! initialize buffers
-       if ( .NOT. allocated( source2target ) ) then
-          allocate ( source2target(nTags*nelem(3)) )
-       endif
-       if ( .NOT. allocated( target2source ) ) then
-          allocate ( target2source(nTags*nelem(3)) )
-       endif
+    ! initialize buffers
+    if ( .NOT. allocated( source2target ) ) then
+       allocate ( source2target(nTags*nelem(3)) )
     endif
-
-    ! on target
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-
-       ! get mesh dimensions from moab
-       ierr=iMOAB_GetMeshInfo(sourceOntargetPID,nverts,nelem,nblocks,nsbc,ndbc)
-       call errorout(ierr,'failed to retrieve mesh info (source on source)')
-
-       ! initialize buffers
-       if ( .NOT. allocated( source2target ) ) then
-          allocate ( source2target(nTags*nelem(3)) )
-       endif
-       if ( .NOT. allocated( target2source ) ) then
-          allocate ( target2source(nTags*nelem(3)) )
-       endif
+    if ( .NOT. allocated( target2source ) ) then
+       allocate ( target2source(nTags*nelem(3)) )
     endif
 
     source2target(:)=0d0
@@ -975,8 +809,7 @@ contains
     ! create weights for remapping bottomDepth
     bottomDepth_weights_identifier='bottomDepthWeights'//C_NULL_CHAR
     fv_method=''//C_NULL_CHAR
-    call ocn_spatial_mode_splitting_calc_weights(btrXbcOnBcPID,&
-                                                 bcComm,&
+    call ocn_spatial_mode_splitting_calc_weights(btrXbcPID,&
                                                  bottomDepth_weights_identifier,&
                                                  fv_method)
 
@@ -984,11 +817,8 @@ contains
     bottomDepthTag='bottomDepth_bc'//C_NULL_CHAR
     bottomDepthTag_btr='bottomDepth_btr'//C_NULL_CHAR
     bottomDepthType(:)=1
-    call ocn_spatial_mode_splitting_define_tags(btrOnBtrPID,&
-                                                btrOnBcPID,&
-                                                bcOnBCPID,&
-                                                btrComm,&
-                                                bcComm,&
+    call ocn_spatial_mode_splitting_define_tags(btrPID,&
+                                                bcPID,&
                                                 bottomDepthTag_btr,&
                                                 bottomDepthTag,&
                                                 bottomDepthType,&
@@ -1036,18 +866,12 @@ contains
     ! remap bathymetry
     totalNumVals=nCellsSolve_btr
     entity_type=1
-    call ocn_spatial_mode_splitting_remap_data(btrOnBtrPID,&
-                                               btrOnBcPID,&
-                                               bcOnBcPID,&
-                                               btrXbcOnBcPID,&
-                                               btrOnBtr,&
-                                               btrOnBc,&
-                                               bcOnBc,&
-                                               btrXbcOnBc,&
-                                               btrComm,&
-                                               bcComm,&
-                                               btrGroup,&
-                                               bcGroup,&
+    call ocn_spatial_mode_splitting_remap_data(btrPID,&
+                                               bcPID,&
+                                               btrXbcPID,&
+                                               btrGID,&
+                                               bcGID,&
+                                               btrXbcGID,&
                                                bottomDepthTag_btr,&
                                                bottomDepthTag,&
                                                totalNumVals,&
@@ -1059,7 +883,7 @@ contains
     bottomDepth_bc(:)=-9999d0
     totalNumVals=nCellsSolve_bc
     entity_type=1
-    ierr = iMOAB_GetDoubleTagStorage(bcOnBcPID,&
+    ierr = iMOAB_GetDoubleTagStorage(bcPID,&
                                      bottomDepthTag,&
                                      totalNumVals,&
                                      entity_type,&
@@ -1393,18 +1217,12 @@ contains
         ! perform remapping
         totalNumVals=2*nCellsSolve_bc
         entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(bcOnBcPID,&
-                                                   bcOnBtrPID,&
-                                                   btrOnBtrPID,&
-                                                   bcXbtrOnBtrPID,&
-                                                   bcOnBc,&
-                                                   bcOnBtr,&
-                                                   btrOnBtr,&
-                                                   bcXbtrOnBtr,&
-                                                   bcComm,&
-                                                   btrComm,&
-                                                   bcGroup,&
-                                                   btrGroup,&
+        call ocn_spatial_mode_splitting_remap_data(bcPID,&
+                                                   btrPID,&
+                                                   bcXbtrPID,&
+                                                   bcGID,&
+                                                   btrGID,&
+                                                   bcXbtrGID,&
                                                    bc2btrFields,&
                                                    bc2btrFields_btr,&
                                                    totalNumVals,&
@@ -1448,7 +1266,7 @@ contains
         ! get remapped data from iMOAB
         totalNumVals=2*nCellsSolve_btr
         entity_type=1
-        ierr = iMOAB_GetDoubleTagStorage(btrOnBtrPID,&
+        ierr = iMOAB_GetDoubleTagStorage(btrPID,&
                                          bc2btrFields_btr,&
                                          totalNumVals,&
                                          entity_type,&
@@ -1629,18 +1447,12 @@ contains
         ! perform remapping
         totalNumVals=2*nCellsSolve_btr
         entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(btrOnBtrPID,&
-                                                   btrOnBcPID,&
-                                                   bcOnBcPID,&
-                                                   btrXbcOnBcPID,&
-                                                   btrOnBtr,&
-                                                   btrOnBc,&
-                                                   bcOnBc,&
-                                                   btrXbcOnBc,&
-                                                   btrComm,&
-                                                   bcComm,&
-                                                   btrGroup,&
-                                                   bcGroup,&
+        call ocn_spatial_mode_splitting_remap_data(btrPID,&
+                                                   bcPID,&
+                                                   btrXbcPID,&
+                                                   btrGID,&
+                                                   bcGID,&
+                                                   btrXbcGID,&
                                                    btr2bcFields_btr,&
                                                    btr2bcFields,&
                                                    totalNumVals,&
@@ -1685,7 +1497,7 @@ contains
         ! get remapped data from iMOAB
         totalNumVals=2*nCellsSolve_bc
         entity_type=1
-        ierr = iMOAB_GetDoubleTagStorage(bcOnBcPID,&
+        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
                                          btr2bcFields,&
                                          totalNumVals,&
                                          entity_type,&
@@ -1733,18 +1545,12 @@ contains
 !> \details
 !
 !-----------------------------------------------------------------------
-    subroutine ocn_spatial_mode_splitting_remap_data(sourceOnSourcePID,&
-                                                     sourceOnTargetPID,&
-                                                     targetOnTargetPID,&
+    subroutine ocn_spatial_mode_splitting_remap_data(sourcePID,&
+                                                     targetPID,&
                                                      overlapPID,&
-                                                     sourceOnSourceGID,&
-                                                     sourceOnTargetGID,&
-                                                     targetOnTargetGID,&
+                                                     sourceGID,&
+                                                     targetGID,&
                                                      overlapGID,&
-                                                     sourceComm,&
-                                                     targetComm,&
-                                                     sourceGroup,&
-                                                     targetGroup,&
                                                      fieldTags,&
                                                      fieldTagsProjected,&
                                                      totalNumVals,&
@@ -1757,18 +1563,14 @@ contains
     !-----------------------------------------------------------------
 
     ! moab pids
-    integer,intent(inout) :: sourceOnSourcePID,sourceOnTargetPID,&
-                          targetOnTargetPID,&
-                          overlapPID
+    integer,intent(inout) :: sourcePID,&
+                             targetPID,&
+                             overlapPID
 
     ! moab global id's
-    integer,intent(inout) :: sourceOnSourceGID,sourceOnTargetGID,&
-                          targetOnTargetGID,&
-                          overlapGID
-
-    ! mpi comms/groups
-    integer,intent(inout) :: sourceComm,targetComm
-    integer,intent(inout) :: sourceGroup,targetGroup
+    integer,intent(inout) :: sourceGID,&
+                             targetGID,&
+                             overlapGID
 
     ! names of fields
     character(:),allocatable,intent(inout) :: fieldTags,fieldTagsProjected
@@ -1811,48 +1613,35 @@ contains
     ! set filter type
     filter_type=0
 
-    ! store values in moab on source side and send to target side
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_SetDoubleTagStorage(sourceOnSourcePID,&
-                                      fieldTags,&
-                                      totalNumVals,&
-                                      entity_type,&
-                                      buffer)
-       call errorout(ierr,'unable to set storage on source')
+    ierr=iMOAB_SetDoubleTagStorage(sourcePID,&
+                                   fieldTags,&
+                                   totalNumVals,&
+                                   entity_type,&
+                                   buffer)
+    call errorout(ierr,'unable to set storage on source')
 
-       ! send to target "side"
-       ierr=iMOAB_SendElementTag(sourceOnSourcePID,&
+    ! send to target "side"
+    ierr=iMOAB_SendElementTag(sourcePID,&
+                              fieldTags,&
+                              moabComm,&
+                              sourceGID)
+    call errorout(ierr,'unable to send data from source "side" to target "side"')
+
+    ierr=iMOAB_ReceiveElementTag(sourcePID,&
                                  fieldTags,&
-                                 targetComm,&
-                                 sourceOnTargetGID)
-       call errorout(ierr,'unable to send data from source "side" to target "side"')
-    endif
+                                 moabComm,&
+                                 sourceGID)
+    call errorout(ierr,'unable to receive data on target "side"')
 
-    ! receive values on target side
-    if ( targetComm .NE. MPI_COMM_NULL ) then
+    ierr=iMOAB_FreeSenderBuffers(sourcePID,sourceGID)
+    call errorout(ierr,"unable to free sender buffers")
 
-       ierr=iMOAB_ReceiveElementTag(sourceOnTargetPID,&
-                                    fieldTags,&
-                                    targetComm,&
-                                    sourceOnTargetGID)
-       call errorout(ierr,'unable to receive data on target "side"')
-    endif
-
-    ! free send buffers
-    if ( sourceComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_FreeSenderBuffers(sourceOnSourcePID,sourceOnTargetGID)
-       call errorout(ierr,"unable to free sender buffers")
-    endif
-
-    ! perform remapping
-    if ( targetComm .NE. MPI_COMM_NULL ) then
-       ierr=iMOAB_ApplyScalarProjectionWeights(overlapPID,&
-                                               filter_type,&
-                                               weights_identifier,&
-                                               fieldTags,&
-                                               fieldTagsProjected)
-       call errorout(ierr,'unable to reproject :(')
-    endif
+    ierr=iMOAB_ApplyScalarProjectionWeights(overlapPID,&
+                                            filter_type,&
+                                            weights_identifier,&
+                                            fieldTags,&
+                                            fieldTagsProjected)
+    call errorout(ierr,'unable to reproject :(')
 
 #endif
 
