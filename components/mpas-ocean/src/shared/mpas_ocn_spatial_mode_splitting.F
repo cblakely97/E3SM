@@ -470,6 +470,9 @@ contains
     ! local variables
     !-----------------------------------------------------------------
 
+    ! moab variables
+    integer :: meshType=3 ! finite volume
+
     ! error handling
     integer :: ierr
 
@@ -486,14 +489,22 @@ contains
     call errorout(ierr,'failed to compute mesh intersection')
 
     ! calculate coverage graph
-    ierr=iMOAB_CoverageGraph(moabComm,&
-                             sourcePID,&
-                             sourcePID,&
-                             overlapPID,&
-                             sourceGID,&
-                             sourceGID,&
-                             sourceGID)
+    ierr=iMOAB_ComputeCommGraph(sourcePID,&
+                                overlapPID,&
+                                moabComm,&
+                                moabGroup,&
+                                moabGroup,&
+                                meshType,&
+                                meshType,&
+                                sourceGID,&
+                                overlapGID)
     call errorout(ierr,'failed to compute coverage graph')
+
+!    ierr=iMOAB_DumpCommGraph(sourcePID,&
+!                             overlapGID,&
+!                             1,&
+!                             'commgraph'//C_NULL_CHAR)
+!    call errorout(ierr,'failed to dump coverage graph')
 
 #endif
 
@@ -780,8 +791,15 @@ contains
     real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc,&
                                                 bottomDepth_btr
 
+    ! buffer for sending the data
+    real (kind=RKIND), dimension(:), allocatable :: buffer_btr2bc, buffer_bc2btr
+    real (kind=RKIND), dimension(:), allocatable :: buffer_btr2bc_btr, buffer_bc2btr_btr
+
     ! other parameters moab needs
     integer :: totalNumVals, entity_type
+
+    ! for loops
+    integer :: iCell
 
     ! error handling
     integer :: ierr
@@ -789,13 +807,6 @@ contains
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
-
-    ! get configuration to see if we are using the mode splitting, if not return
-    call mpas_pool_get_config(domain % configs, 'config_spatial_mode_splitting',&
-                              config_spatial_mode_splitting)
-    if (.not. config_spatial_mode_splitting) then
-       return
-    endif
 
 #ifdef HAVE_MOAB
 
@@ -824,6 +835,15 @@ contains
                                                 bottomDepthType,&
                                                 bottomDepthIndex)
 
+    ! allocate our buffers
+    call ocn_spatial_mode_splitting_allocate_buffers(btrPID,&
+                                                     buffer_btr2bc_btr,&
+                                                     buffer_bc2btr_btr,&
+                                                     1)
+    call ocn_spatial_mode_splitting_allocate_buffers(bcPID,&
+                                                     buffer_btr2bc,&
+                                                     buffer_bc2btr,&
+                                                     1)
 
     !--------------------------------------------------------------------
     ! remap bottomDepth from barotropic to baroclinic domains
@@ -864,6 +884,11 @@ contains
     end do 
 
     ! remap bathymetry
+    buffer_btr2bc_btr(:)=0d0
+    do iCell = 1,nCellsSolve_btr
+      buffer_btr2bc_btr(iCell)=bottomDepth_btr(iCell)
+    enddo
+
     totalNumVals=nCellsSolve_btr
     entity_type=1
     call ocn_spatial_mode_splitting_remap_data(btrPID,&
@@ -876,7 +901,7 @@ contains
                                                bottomDepthTag,&
                                                totalNumVals,&
                                                entity_type,&
-                                               bottomDepth_btr,&
+                                               buffer_btr2bc_btr,&
                                                bottomDepth_weights_identifier)
 
     ! store remapped bathymetry in bottomDepth_bc
@@ -887,11 +912,17 @@ contains
                                      bottomDepthTag,&
                                      totalNumVals,&
                                      entity_type,&
-                                     bottomDepth_bc)
+                                     buffer_btr2bc)
     call errorout(ierr,'failed to get bottomDepth_bc')
+
+    do iCell = 1,nCellsSolve_bc
+       bottomDepth_bc(iCell)=buffer_btr2bc(iCell)
+    enddo
 
     ! halo exchange new bathy
     call mpas_dmpar_field_halo_exch(domain_bc,'bottomDepth')
+
+    deallocate(buffer_btr2bc_btr,buffer_bc2btr_btr,buffer_btr2bc,buffer_bc2btr)
 
 #endif
     end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
@@ -1035,6 +1066,9 @@ contains
          end do
 
          ! find min depth (refBottomDepth_bc - 50% of layer thickness)
+         if (idz.eq.1) then
+            call mpas_log_write('we should fail here',MPAS_LOG_CRIT)
+         endif
          minBottomDepth = 0.5d0 * ( refBottomDepth_bc(idz-1) + refBottomDepth_bc(idz) )
 
          ! if bottomDepth_bc <= minBottomDepth, subtract a layer
@@ -1624,16 +1658,16 @@ contains
     ierr=iMOAB_SendElementTag(sourcePID,&
                               fieldTags,&
                               moabComm,&
-                              sourceGID)
+                              overlapGID)
     call errorout(ierr,'unable to send data from source "side" to target "side"')
 
-    ierr=iMOAB_ReceiveElementTag(sourcePID,&
+    ierr=iMOAB_ReceiveElementTag(overlapPID,&
                                  fieldTags,&
                                  moabComm,&
                                  sourceGID)
     call errorout(ierr,'unable to receive data on target "side"')
 
-    ierr=iMOAB_FreeSenderBuffers(sourcePID,sourceGID)
+    ierr=iMOAB_FreeSenderBuffers(sourcePID,overlapGID)
     call errorout(ierr,"unable to free sender buffers")
 
     ierr=iMOAB_ApplyScalarProjectionWeights(overlapPID,&
