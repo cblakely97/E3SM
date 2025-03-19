@@ -215,16 +215,38 @@ contains
       call ocn_meshCreate(domain)
       call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
       call ocn_meshCreate(domain)
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "baroclinic first"
+      write(6,*) ""
+      write(6,*) ""
+      call ocn_spatial_mode_splitting_dmpar_init_bc(domain)
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "barotropic next"
+      write(6,*) ""
+      write(6,*) ""
+      call ocn_spatial_mode_splitting_dmpar_init_btr(domain % next)
 
       !--------------------------------------------------------------------
       ! baroclinic => barotropic
       !--------------------------------------------------------------------
 
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "remap baroclinic => barotropic"
+      write(6,*) ""
+      write(6,*) ""
       call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
       !--------------------------------------------------------------------
       ! barotropic => baroclinic
       !--------------------------------------------------------------------
+      write(6,*) ""
+      write(6,*) ""
+      write(6,*) "remap barotropic => baroclinic"
+      write(6,*) ""
+      write(6,*) ""
       call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
       !--------------------------------------------------------------------

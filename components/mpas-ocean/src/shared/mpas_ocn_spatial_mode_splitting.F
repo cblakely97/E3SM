@@ -42,6 +42,9 @@ module ocn_spatial_mode_splitting
     use ocn_mesh
     use ocn_constants
     use ocn_config
+    use ocn_vel_self_attraction_loading, only : check, interpolate
+
+    use netcdf
 
 #ifdef HAVE_MOAB
     use iMOAB
@@ -71,7 +74,9 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_bc2btr_remapping,&
               ocn_spatial_mode_splitting_btr2bc_remapping,&
               ocn_spatial_mode_splitting_time_int_split_setup_btr,&
-              ocn_spatial_mode_splitting_bottomDepth_remapping
+              ocn_spatial_mode_splitting_bottomDepth_remapping,&
+              ocn_spatial_mode_splitting_dmpar_init_bc,&
+              ocn_spatial_mode_splitting_dmpar_init_btr
 
     !--------------------------------------------------------------------
     !
@@ -143,6 +148,26 @@ module ocn_spatial_mode_splitting
    character(:), allocatable :: bottomDepthTag,bottomDepthTag_btr
    integer, dimension(2) :: bottomDepthIndex, bottomDepthType
    character(:), allocatable :: bottomDepth_weights_identifier
+
+   ! The following variables are for performing the edge-based remapping with the mpas_dmpar
+   ! routines. This is a temporary measure until we get moab fully functioning but we want a
+   ! functioning baseline.
+
+   ! weights stored as sparse array
+   integer, dimension(:), allocatable :: rowValues_bc2btr, colValues_bc2btr,&
+                                         rowValues_btr2bc, colValues_btr2bc
+   real(kind=RKIND), dimension(:), allocatable :: sValues_bc2btr, sValues_btr2bc
+
+   ! for MPI communication
+   integer :: curProc, nProcs
+   character(:), allocatable :: weights_filename_btr2bc
+   integer :: nEdgesGlobal_bc, nEdgesGlobal_btr
+   integer, dimension(:), allocatable :: nEdgesDisplacement_bc,&
+                                         nEdgesDisplacement_btr,&
+                                         indexToEdgeIDGathered_bc,&
+                                         indexToEdgeIDGathered_btr,&
+                                         nEdgesPerProc_bc,&
+                                         nEdgesPerProc_btr
 
 !***********************************************************************
 
@@ -261,6 +286,20 @@ contains
        call mpas_rbf_interp_initialize(meshPool)
        call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_bc)
        call mpas_init_reconstruct(meshPool,.true.)
+
+       ! as a stopgap measure we are going to use scatter/gather
+       ! initialize
+!       write(6,*) "about to init dmpar for baroclinic"
+!       weights_filename_btr2bc='16km_to_32km_weights.nc'
+!       call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
+!                                                            weights_filename_btr2bc,&
+!                                                            rowValues_bc2btr,&
+!                                                            colValues_bc2btr,&
+!                                                            sValues_bc2btr,&
+!                                                            nEdgesGlobal_bc,&
+!                                                            nEdgesDisplacement_bc,&
+!                                                            indexToEdgeIDGathered_bc,&
+!                                                            nEdgesPerProc_bc)
        return
     elseif ( domain % domainID .eq. 1 ) then
 
@@ -295,6 +334,19 @@ contains
        call mpas_rbf_interp_initialize(meshPool)
        call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_btr)
        call mpas_init_reconstruct(meshPool)
+
+       ! as a stopgap measure we are going to use scatter/gather
+       ! initialize
+!       weights_filename_btr2bc='32km_to_!6km_weights.nc'
+!       call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
+!                                                            weights_filename_btr2bc,&
+!                                                            rowValues_btr2bc,&
+!                                                            colValues_btr2bc,&
+!                                                            sValues_btr2bc,&
+!                                                            nEdgesGlobal_btr,&
+!                                                            nEdgesDisplacement_btr,&
+!                                                            indexToEdgeIDGathered_btr,&
+!                                                            nEdgesPerProc_btr)
     endif
 
     !--------------------------------------------------------------------
@@ -1048,7 +1100,7 @@ contains
          end do
 
          ! check if the sum of the layer thicknesses is consistent with the bottom depth
-         if ( wc_thickness .EQ. bottomDepth_bc(iCell) ) then
+         if ( wc_thickness .eq. bottomDepth_bc(iCell) ) then
             cycle
          end if
 
@@ -1390,8 +1442,8 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_bc, nEdgesAll_bc,&
-                        nCellsAll_bc
+                        vertexDegree_bc
+    integer, pointer :: nEdgesAll_bc, nEdgesAll_btr
 
     ! size info for moab
     integer :: totalNumVals, entity_type
@@ -1449,50 +1501,16 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesAll_btr)
+
+        ! exchange halos for barotropicThicknessFlux
+
+        ! TODO: test if this is actually necessary
+        call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_btr)
-
-        ! exchange halos for barotropicThicknessFlux
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
-
-        ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
-                              barotropicThicknessFluxX_btr,&
-                              barotropicThicknessFluxY_btr,&
-                              barotropicThicknessFluxZ_btr,&
-                              barotropicThicknessFluxZonal_btr,&
-                              barotropicThicknessFluxMeridional_btr)
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
-
-        ! pack buffers
-        do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        end do
-
-        ! perform remapping
-        totalNumVals=2*nCellsSolve_btr
-        entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(btrPID,&
-                                                   bcPID,&
-                                                   btrXbcPID,&
-                                                   btrGID,&
-                                                   bcGID,&
-                                                   btrXbcGID,&
-                                                   btr2bcFields_btr,&
-                                                   btr2bcFields,&
-                                                   totalNumVals,&
-                                                   entity_type,&
-                                                   btr2bcVar_btr,&
-                                                   btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
     end do
@@ -1508,59 +1526,28 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
-        ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
-        call mpas_pool_get_dimension(meshpool, 'vertexDegree', vertexDegree_bc)
-
-        ! get connectivity/etc.
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
-        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_bc)
-        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_bc)
-        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_bc)
-
         ! get barotropicThicknessFlux from 
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesAll_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_bc)
 
-        ! get remapped data from iMOAB
-        totalNumVals=2*nCellsSolve_bc
-        entity_type=1
-        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
-                                         btr2bcFields,&
-                                         totalNumVals,&
-                                         entity_type,&
-                                         btr2bcVar)
-        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_bc
-            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-        end do
-
-        ! exchange halos
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
-
-        ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0d0
-        do iEdge = 1,nEdgesSolve_bc
-           cell1 = cellsOnEdge_bc(1, iEdge)
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
-                                 barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
-                                      barotropicThicknessFluxMeridional_bc(cell2))
-           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-                                            sin(angleEdge_bc(iEdge))*meridional_edge
-        end do
+        ! interpolate using dmpar routine for now
+        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                                          nEdgesAll_btr,&
+                                                          nEdgesGlobal_btr,&
+                                                          nEdgesPerProc_btr,&
+                                                          nEdgesDisplacement_btr,&
+                                                          indexToEdgeIDGathered_btr,&
+                                                          barotropicThicknessFlux_btr,&
+                                                          nEdgesAll_btr,&
+                                                          nEdgesGlobal_bc,&
+                                                          nEdgesPerProc_bc,&
+                                                          nEdgesDisplacement_bc,&
+                                                          indexToEdgeIDGathered_bc,&
+                                                          barotropicThicknessFlux_bc,&
+                                                          colValues_btr2bc,&
+                                                          rowValues_btr2bc,&
+                                                          sValues_btr2bc)
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
 
@@ -1897,6 +1884,415 @@ contains
 !-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_time_int_split_setup_btr !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_dmpar_remapping_init
+!
+!> \brief initializes dmpar remapping
+!> \author Coleman Blakely
+!> \date   March 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
+                                                               weights_filename,&
+                                                               rowValues,&
+                                                               colValues,&
+                                                               sValues,&
+                                                               nEdgesGlobal,&
+                                                               nEdgesDisplacement,&
+                                                               indexToEdgeIDGathered,&
+                                                               nEdgesPerProc) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(in) :: domain
+    character(:), allocatable, intent(in) :: weights_filename
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    ! weights stored as sparse array
+    integer, dimension(:), allocatable, intent(inout) :: rowValues, colValues
+    real(kind=RKIND), dimension(:), allocatable, intent(inout) :: sValues
+
+    ! for communication
+    integer, intent(inout) :: nEdgesGlobal
+    integer, dimension(:), allocatable, intent(inout) :: nEdgesDisplacement,&
+                                                         indexToEdgeIDGathered,&
+                                                         nEdgesPerProc
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    type(block_type), pointer :: block_ptr  ! variables in current subblock
+    type(mpas_pool_type), pointer :: meshPool
+
+    ! meshPool
+    integer, dimension(:), pointer :: nEdgesArrayLocal
+    integer :: nEdgesOwnedLocal
+    integer, dimension(:), pointer :: indexToEdgeIDLocal
+
+    ! netcdf variables
+    integer :: ncid ! file id
+    integer :: ns_dim_id, na_dim_id ! dimension id's
+    integer :: row_id, col_id, s_id ! variable id's
+    character(len=NF90_MAX_NAME) :: dummy_char
+    integer :: n_s, n_a
+
+    ! loop indices
+    integer :: iCell, iProc
+
+    ! for error handling
+    integer :: err,err_tmp
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    ! Begin MPI portion
+    call MPI_COMM_RANK( domain % dminfo % comm, curProc, err_tmp)
+    err = ior(err, err_tmp)
+    call MPI_COMM_SIZE( domain % dminfo % comm, nProcs, err_tmp)
+    err = ior(err, err_tmp)
+ 
+    if (curProc.eq.0) then
+        allocate(nEdgesPerProc(nProcs))
+        allocate(nEdgesDisplacement(nProcs))
+    else
+        allocate(nEdgesPerProc(1))
+        allocate(nEdgesDisplacement(1))
+    endif
+
+    ! Gather nEdgesOwned
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+    call mpas_pool_get_dimension(meshPool, 'nEdgesArray', nEdgesArrayLocal)
+    call mpas_pool_get_array(meshPool, 'indexToEdgeID', indexToEdgeIDLocal)
+    nEdgesOwnedLocal=nEdgesArrayLocal(1)
+    call MPI_GATHER( nEdgesOwnedLocal, 1, MPI_INTEGER, nEdgesPerProc, 1, MPI_INTEGER, &
+                     0, domain % dminfo % comm, err_tmp)
+    err = ior(err, err_tmp)
+ 
+    ! Set Displacement variable for GATHERV command
+    if (curProc.eq.0) then
+        nEdgesGlobal = sum(nEdgesPerProc)
+        allocate(indexToEdgeIDGathered(nEdgesGlobal))
+        nEdgesDisplacement(1) = 0
+        if (nProcs > 1) then
+            do iProc=2,nProcs
+                nEdgesDisplacement(iProc) = nEdgesDisplacement(iProc-1) + nEdgesPerProc(iProc-1)
+            enddo
+        endif
+    else
+        allocate(indexToEdgeIDGathered(1))
+    endif
+ 
+    ! Gather indexToEdgeID
+    call MPI_GATHERV( indexToEdgeIDLocal, nEdgesOwnedLocal, MPI_INTEGER, indexToEdgeIDGathered, &
+            nEdgesPerProc, nEdgesDisplacement, MPI_INTEGER, 0, domain % dminfo % comm, err_tmp)
+    err = ior(err, err_tmp)
+ 
+    ! initialize map only on proc 0
+
+    ! don't do this on baroclinic domain since we don't have the weights yet
+    if (domain % domainID .eq. 0) then
+       return
+    endif
+    if (curProc.eq.0) then
+        ! Open netcdf weights files
+        call check( nf90_open(path = trim(weights_filename), mode = nf90_nowrite, ncid = ncid) ,err)
+ 
+        ! Get dimension ID
+        call check( nf90_inq_dimid(ncid, "n_s", ns_dim_id) ,err)
+        call check( nf90_inq_dimid(ncid, "n_a", na_dim_id) ,err)
+ 
+        ! Get Variable IDs
+        call check( nf90_inq_varid(ncid, "row", row_id) ,err)
+        call check( nf90_inq_varid(ncid, "col", col_id) ,err)
+        call check( nf90_inq_varid(ncid, "S", s_id) ,err)
+ 
+        ! Get Dimension Length 
+        call check( nf90_inquire_dimension(ncid, ns_dim_id, dummy_char, n_s) ,err)
+        call check( nf90_inquire_dimension(ncid, na_dim_id, dummy_char, n_a) ,err)
+ 
+        ! Allocate matrices to read data into
+        allocate ( rowValues (n_s) )
+        allocate ( colValues (n_s) )
+        allocate ( sValues (n_s) )
+ 
+        ! Retrieve data
+        call check( nf90_get_var(ncid, col_id, colValues(:) ) ,err)
+        call check( nf90_get_var(ncid, row_id, rowValues(:) ) ,err)
+        call check( nf90_get_var(ncid, s_id, sValues(:) ) ,err)
+    endif
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_dmpar_remapping_init !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_dmpar_interpolate
+!
+!> \brief gathers and interpolates using dmpar routines
+!> \author Coleman Blakely
+!> \date   March, 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                                            nEdgesLocal_source,&
+                                                            nEdgesGlobal_source,&
+                                                            nEdgesPerProc_source,&
+                                                            nEdgesDisplacement_source,&
+                                                            indexToEdgeIDGathered_source,&
+                                                            localArray_source,&
+                                                            nEdgesLocal_target,&
+                                                            nEdgesGlobal_target,&
+                                                            nEdgesPerProc_target,&
+                                                            nEdgesDisplacement_target,&
+                                                            indexToEdgeIDGathered_target,&
+                                                            localArray_target,&
+                                                            colValues,&
+                                                            rowValues,&
+                                                            sValues) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type (domain_type), intent(in) :: domain
+
+    ! source
+    integer, intent(in) :: nEdgesLocal_source,nEdgesGlobal_source
+    integer, dimension(:), intent(in) :: nEdgesPerProc_source,&
+                                         nEdgesDisplacement_source,&
+                                         indexToEdgeIDGathered_source
+
+    ! target
+    integer, intent(in) :: nEdgesLocal_target,nEdgesGlobal_target
+    integer, dimension(:), intent(in) :: nEdgesPerProc_target,&
+                                         nEdgesDisplacement_target,&
+                                         indexToEdgeIDGathered_target
+
+    ! weights
+    integer, dimension(:), intent(in) :: colValues, rowValues
+    real(kind=RKIND), dimension(:), intent(in) :: sValues
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+    real(kind=RKIND), dimension(:), intent(inout) :: localArray_source,&
+                                                     localArray_target
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    type(block_type), pointer :: block_ptr  ! variables in current subblock
+    type(mpas_pool_type), pointer :: meshPool
+
+    ! send buffers
+    real(kind=RKIND), dimension(:), allocatable :: sendBuffer_source, sendBuffer_target
+
+    ! meshPool
+    integer :: nEdges
+
+    ! loop indices
+    integer :: iEdge,idx
+
+    ! arrays for storing
+    real(kind=RKIND), dimension(:), allocatable :: gatheredArray_source,&
+                                                   globalArray_source,&
+                                                   gatheredArray_target,&
+                                                   globalArray_target
+
+    ! for error handling
+    integer :: err
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    ! allocate global arrays
+    if (curProc.eq.0) then
+       allocate(globalArray_source(nEdgesGlobal_source),&
+                gatheredArray_source(nEdgesGlobal_source),&
+                globalArray_target(nEdgesGlobal_target),&
+                gatheredArray_target(nEdgesGlobal_target))
+             
+    else
+       allocate(globalArray_source(1),&
+                gatheredArray_source(1),&
+                globalArray_target(1),&
+                gatheredArray_target(1))
+    endif
+
+    ! gather values on proc 0
+    call MPI_GATHERV(localArray_source,&
+                     nEdgesLocal_source,&
+                     MPI_DOUBLE,&
+                     gatheredArray_source,&
+                     nEdgesPerProc_source,&
+                     nEdgesDisplacement_source,&
+                     MPI_DOUBLE,&
+                     0,&
+                     domain % dminfo % comm,&
+                     err)
+
+    ! interpolate
+    if (curProc.eq.0) then
+
+       ! put values in correct order
+       do iEdge = 1,nEdgesGlobal_source
+          idx=indexToEdgeIDGathered_source(iEdge)
+          globalArray_source(idx)=gatheredArray_source(iEdge)
+       enddo
+
+       ! interpolate
+       call interpolate(colValues, rowValues, sValues,&
+                        globalArray_source, globalArray_target)
+
+       ! put back in order to scatter
+       do iEdge = 1,nEdgesGlobal_target
+          idx=indexToEdgeIDGathered_target(iEdge)
+          gatheredArray_target(iEdge)=globalArray_target(idx)
+       enddo
+    endif
+
+    ! scatter
+    localArray_target(:)=0d0
+    call MPI_SCATTERV(gatheredArray_target,&
+                      nEdgesPerProc_target,&
+                      nEdgesDisplacement_target,&
+                      MPI_DOUBLE,&
+                      localArray_target,&
+                      nEdgesLocal_target,&
+                      MPI_DOUBLE,&
+                      0,&
+                      domain % dminfo % comm,&
+                      err)
+
+    ! deallocate arrays
+    deallocate(globalArray_source, globalArray_target,&
+               gatheredArray_source, gatheredArray_target)
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_dmpar_interpolate !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_dmpar_init_bc
+!
+!> \brief gathers and interpolates using dmpar routines
+!> \author Coleman Blakely
+!> \date   March, 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_dmpar_init_bc(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type (domain_type), intent(in) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    weights_filename_btr2bc='16km_to_32km_weights.nc'
+    call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
+                                                         weights_filename_btr2bc,&
+                                                         rowValues_bc2btr,&
+                                                         colValues_bc2btr,&
+                                                         sValues_bc2btr,&
+                                                         nEdgesGlobal_bc,&
+                                                         nEdgesDisplacement_bc,&
+                                                         indexToEdgeIDGathered_bc,&
+                                                         nEdgesPerProc_bc)
+
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_dmpar_init_bc !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_dmpar_init_btr
+!
+!> \brief gathers and interpolates using dmpar routines
+!> \author Coleman Blakely
+!> \date   March, 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_dmpar_init_btr(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type (domain_type), intent(in) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    weights_filename_btr2bc='soma_weights_16km_to_32km.nc'
+    call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
+                                                         weights_filename_btr2bc,&
+                                                         rowValues_btr2bc,&
+                                                         colValues_btr2bc,&
+                                                         sValues_btr2bc,&
+                                                         nEdgesGlobal_btr,&
+                                                         nEdgesDisplacement_btr,&
+                                                         indexToEdgeIDGathered_btr,&
+                                                         nEdgesPerProc_btr)
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_dmpar_init_btr !}}}
+
+!***********************************************************************
 
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||

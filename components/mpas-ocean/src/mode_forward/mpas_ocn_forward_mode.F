@@ -296,6 +296,7 @@ module ocn_forward_mode
 
          if (domain % domainID == 0) then
             call ocn_meshCreate(domain_ptr)
+            call ocn_spatial_mode_splitting_dmpar_init_bc(domain_ptr)
             return
          elseif (domain % domainID == 1) then
             ! Create reusable halo exchange for subcycling
@@ -318,6 +319,10 @@ module ocn_forward_mode
 
       ! fill the ocean mesh structure
       call ocn_meshCreate(domain_ptr)
+
+      if (config_spatial_mode_splitting) then
+         call ocn_spatial_mode_splitting_dmpar_init_btr(domain_ptr % next)
+      endif
 
       !-----------------------------------------------------------------
       ! Initialize submodules and fields that are required by others
