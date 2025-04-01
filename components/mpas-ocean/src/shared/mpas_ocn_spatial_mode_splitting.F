@@ -63,6 +63,10 @@ module ocn_spatial_mode_splitting
     !
     !--------------------------------------------------------------------
 
+    ! Multiplicative masks and vectors for various conditions
+    real(kind=RKIND), public, target, allocatable :: edgeMask_spatial_split_btr(:,:),&
+                                                     edgeMask_spatial_split_bc(:,:)
+
     !--------------------------------------------------------------------
     !
     ! Public member functions
@@ -76,7 +80,8 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_time_int_split_setup_btr,&
               ocn_spatial_mode_splitting_bottomDepth_remapping,&
               ocn_spatial_mode_splitting_dmpar_init_bc,&
-              ocn_spatial_mode_splitting_dmpar_init_btr
+              ocn_spatial_mode_splitting_dmpar_init_btr,&
+              ocn_spatial_mode_splitting_set_edgeMask_btr
 
     !--------------------------------------------------------------------
     !
@@ -148,6 +153,9 @@ module ocn_spatial_mode_splitting
    character(:), allocatable :: bottomDepthTag,bottomDepthTag_btr
    integer, dimension(2) :: bottomDepthIndex, bottomDepthType
    character(:), allocatable :: bottomDepth_weights_identifier
+
+   ! variables for setting edgeMask for the boundary between the baroclinic and barotropic domains
+   integer, pointer :: nVertLevels_bc, nEdgesAll_bc
 
    ! The following variables are for performing the edge-based remapping with the mpas_dmpar
    ! routines. This is a temporary measure until we get moab fully functioning but we want a
@@ -1745,6 +1753,7 @@ contains
     type(mpas_pool_type), pointer :: diagnosticsPool
 
     ! loop indices
+    integer :: cell1, cell2, iEdge
     integer :: i, k, n
     integer :: ierr
 
@@ -1803,6 +1812,20 @@ contains
     call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing)
 
     call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux', barotropicThicknessFlux)
+
+    ! reset edgeMask appropriately if on baroclinic domain
+    if (domain % domainID .eq. 0) then
+       do iEdge=1,nEdgesAll
+          cell1=cellsOnEdge(1,iEdge)
+          cell2=cellsOnEdge(1,iEdge)
+          if (cell1.EQ.nCellsAll+1.OR.cell2.EQ.nCellsAll+1) then
+             do k = 1,maxLevelEdgeTop(iEdge)
+                edgeMask(k,iEdge)=1d0
+             enddo
+          endif
+       enddo
+    endif
+
 
 
 !-------------------------------------------------------------------------------
@@ -2291,6 +2314,92 @@ contains
 !-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_dmpar_init_btr !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_set_edgeMask_btr
+!
+!> \brief sets edgeMask_btr to allow for barotropic but not baroclinic 
+!>        flow and fluxes to propagate through the edges of the
+!>        baroclinic domain.
+!> \author Coleman Blakely
+!> \date   March, 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_set_edgeMask_btr(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type (domain_type), intent(in) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! pools
+    type (mpas_pool_type), pointer :: meshPool
+
+    ! mesh dimensions
+    integer, pointer :: nEdgesAll_bc, nVertLevels_bc
+
+    ! for finding the bottom of the cell
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc
+    integer, dimension(:,:), pointer :: cellsOnEdge_bc
+    integer, dimension(:), pointer :: maxLevelEdgeTop_bc, maxLevelCell_bc
+
+    ! for loops
+    integer :: iEdge, k
+
+    !
+    integer :: cell1,cell2
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    allocate( edgeMask_spatial_split_btr(nVertLevels, nEdgesAll+1) )
+    allocate( edgeMask_spatial_split_bc(nVertLevels, nEdgesAll+1) )
+    edgeMask_spatial_split_btr(:,:)=0d0
+    edgeMask_spatial_split_bc(:,:)=0d0
+
+    ! get bottom depth of baroclinic mesh
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+    call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth_bc)
+    call mpas_pool_get_array(meshPool, 'maxLevelCell',maxLevelCell_bc)
+    call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop',maxLevelEdgeTop_bc)
+    call mpas_pool_get_array(meshPool, 'cellsOnEdge',cellsOnEdge_bc)
+
+    do iEdge=1,nEdgesAll
+       cell1=cellsOnEdge(1,iEdge)
+       cell2=cellsOnEdge(1,iEdge)
+       do k = minLevelEdgeBot(iEdge),maxLevelEdgeTop(iEdge)
+          edgeMask_spatial_split_btr(k,iEdge)=1d0
+          edgeMask_spatial_split_bc(k,iEdge)=edgeMask(k,iEdge)
+       enddo
+       if (cell1.EQ.nCellsAll+1.OR.cell2.EQ.nCellsAll+1) then
+          do k = 1,maxLevelEdgeTop(iEdge)
+             edgeMask_spatial_split_btr(k,iEdge)=1d0
+             edgeMask(k,iEdge)=1d0
+          enddo
+       endif
+    enddo
+
+
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_set_edgeMask_btr !}}}
 
 !***********************************************************************
 

@@ -291,6 +291,7 @@ module ocn_time_integration_split
       type (domain_type), pointer :: domain_btr, domain_ptr         ! barotropic domain pointer
       type (mpas_pool_type), pointer :: meshPool_bc, meshPool_btr
       real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
+      real (kind=RKIND), dimension(:,:), pointer :: edgeMask_btr, edgeMask_bc
 
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
@@ -334,7 +335,13 @@ module ocn_time_integration_split
       call mpas_pool_get_subpool(block%structs, 'verticalMesh', &
                                                  verticalMeshPool)
 
+      edgeMask_btr => edgeMask
+      edgeMask_bc => edgeMask
+
       if ( config_spatial_mode_splitting) then
+
+        edgeMask_btr => edgeMask_spatial_split_btr
+        edgeMask_bc => edgeMask_spatial_split_bc
 
         ! "next" domain is barotropic domain
         domain_btr => domain % next
@@ -798,6 +805,7 @@ module ocn_time_integration_split
                            + normalVelocityNew(k,iEdge) &
                            + sshGrad )
                enddo ! vertical
+
 
                ! thicknessSum is initialized outside the loop because
                ! on land boundaries maxLevelEdgeTop=0, but we want to
@@ -1784,6 +1792,10 @@ module ocn_time_integration_split
               ! set normalBarotropicVelocityNew to 0 since we calculate it later
               do iEdge = 1,nEdgesAll
                 normalBarotropicVelocityNew(iEdge)=0d0
+                ! CPB Note: zero out baroclinic on edge
+                do k=1,nVertLevels
+                   normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
+                enddo
               enddo
 
             endif
@@ -1812,6 +1824,8 @@ module ocn_time_integration_split
             !$omp parallel
             !$omp do schedule(runtime)
             do iEdge = 1, nEdges
+               ! CPB Note: for spatial split this will be 0 on edge since barotropic is 0
+               ! everywhere at this point and I zero-ed out baroclinic on edges 
                uTemp(:,iEdge) = normalBarotropicVelocityNew(iEdge) &
                             + normalBaroclinicVelocityNew(:,iEdge)
             end do
@@ -1827,6 +1841,8 @@ module ocn_time_integration_split
             !$omp private(k)
             do iEdge = 1, nEdges
                do k = 1, nVertLevels
+                  ! CPB Note: for spatial split this will be 0 on edge since barotropic is 0
+                  ! everywhere at this point and I zero-ed out baroclinic on edges 
                   normalTransportVelocity(k,iEdge) =  &
                              normalBarotropicVelocityNew(iEdge)   + &
                              normalBaroclinicVelocityNew(k,iEdge)
@@ -1883,9 +1899,11 @@ module ocn_time_integration_split
                                     layerThickEdgeFlux(k,iEdge)
                   enddo
 
+                  ! CPB NOTE: we mask out normalThicknessFluxSum on the boundary since we define our
+                  ! domain to have no baroclinic flux there
                   normalVelocityCorrection = useVelocityCorrection* &
                                 ((barotropicThicknessFlux(iEdge) - &
-                                  normalThicknessFluxSum)/thicknessSum)
+                                  edgeMask_bc(k,iEdge)*normalThicknessFluxSum)/thicknessSum)
 
                   ! Because of reformulation, the "barotropic velocity" is now equal to the total
                   ! velocity correction
@@ -1918,7 +1936,9 @@ module ocn_time_integration_split
                   !                         + normalVelocityCorrection
                   ! This is the velocity used in advective terms for layerThickness
                   ! and tracers in tendency calls in stage 3.
-                  normalTransportVelocity(k,iEdge) = edgeMask(k,iEdge)*( &
+                  ! CPB NOTE: at this point for spatial split, normalTransportVelocity will be zero
+                  ! at the edges but we want to let the baroclinic transport happen
+                  normalTransportVelocity(k,iEdge) = edgeMask_btr(k,iEdge)*( &
                              normalTransportVelocity(k,iEdge) + &
                              normalVelocityCorrection)
                enddo
@@ -2189,9 +2209,9 @@ module ocn_time_integration_split
                ! u = normalBarotropicVelocity + normalBaroclinicVelocity
                ! here normalBaroclinicVelocity is at time n+1/2
                ! This is u used in next iteration or step
-               normalVelocityNew(k,iEdge) = edgeMask(k,iEdge)* &
-                         ( normalBarotropicVelocityNew(iEdge) + &
-                           normalBaroclinicVelocityNew(k,iEdge) )
+               normalVelocityNew(k,iEdge) =  &
+                         edgeMask_btr(k,iEdge)*normalBarotropicVelocityNew(iEdge) + &
+                         edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge) 
 
             enddo
             end do ! iEdge

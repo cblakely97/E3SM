@@ -378,7 +378,6 @@ contains
 #ifndef MPAS_OPENACC
       !$omp end do
 #endif
-
 #ifdef MPAS_OPENACC
       !$acc parallel loop present(sfcStressMag)
 #else
@@ -402,7 +401,6 @@ contains
       call ocn_surface_bulk_forcing_vel( &
                                     forcingPool, sfcStress, &
                                     sfcStressMag, err)
-
       ! Add top drag to surface stress
       call ocn_surface_land_ice_fluxes_vel( &
                                        sfcStress, sfcStressMag, err)

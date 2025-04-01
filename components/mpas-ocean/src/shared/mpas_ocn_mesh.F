@@ -134,7 +134,6 @@ module ocn_mesh
 
    ! Multiplicative masks and vectors for various conditions
    real(kind=RKIND), public, dimension(:, :), allocatable :: &
-      edgeMask, &! mask to denote active edges    with depth
       cellMask, &! mask to denote active cells    with depth
       vertexMask, &! mask to denote active vertices with depth
       boundaryEdge, &! mask for boundary edges    at each level
@@ -142,6 +141,9 @@ module ocn_mesh
       boundaryVertex, &! mask for boundary vertices at each level
       edgeSignOnCell, &! sign of edge contributions to a cell
       edgeSignOnVertex ! sign of edge contributions to a vertex
+
+   real(kind=RKIND), public, target,dimension(:, :), allocatable :: &
+      edgeMask! mask to denote active edges    with depth
 
    real(kind=RKIND), public, dimension(:, :), pointer :: &
       weightsOnEdge, &! weights on each edge

@@ -295,8 +295,7 @@ module ocn_forward_mode
          call ocn_spatial_mode_splitting_init_moab_domain(domain)
 
          if (domain % domainID == 0) then
-            call ocn_meshCreate(domain_ptr)
-            call ocn_spatial_mode_splitting_dmpar_init_bc(domain_ptr)
+            call ocn_meshCreate(domain)
             return
          elseif (domain % domainID == 1) then
             ! Create reusable halo exchange for subcycling
@@ -321,6 +320,8 @@ module ocn_forward_mode
       call ocn_meshCreate(domain_ptr)
 
       if (config_spatial_mode_splitting) then
+         call ocn_spatial_mode_splitting_set_edgeMask_btr(domain_ptr)
+         call ocn_spatial_mode_splitting_dmpar_init_bc(domain_ptr)
          call ocn_spatial_mode_splitting_dmpar_init_btr(domain_ptr % next)
       endif
 
