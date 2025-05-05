@@ -319,12 +319,6 @@ module ocn_forward_mode
       ! fill the ocean mesh structure
       call ocn_meshCreate(domain_ptr)
 
-      if (config_spatial_mode_splitting) then
-         call ocn_spatial_mode_splitting_set_edgeMask_btr(domain_ptr)
-         call ocn_spatial_mode_splitting_dmpar_init_bc(domain_ptr)
-         call ocn_spatial_mode_splitting_dmpar_init_btr(domain_ptr % next)
-      endif
-
       !-----------------------------------------------------------------
       ! Initialize submodules and fields that are required by others
       ! or that have dependencies that require specific ordering.
@@ -550,6 +544,13 @@ module ocn_forward_mode
               MPAS_LOG_ERR, masterOnly=.true., flushNow=.true.)
          return
       endif
+
+      if (config_spatial_mode_splitting) then
+         call ocn_spatial_mode_splitting_set_edgeMask_btr(domain_ptr)
+         call ocn_spatial_mode_splitting_dmpar_init_bc(domain_ptr)
+         call ocn_spatial_mode_splitting_dmpar_init_btr(domain_ptr % next)
+      endif
+
 
    !--------------------------------------------------------------------
 

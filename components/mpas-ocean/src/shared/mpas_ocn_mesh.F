@@ -1259,6 +1259,7 @@ contains
       do iCell = 1, nCellsAll+1
          if (maxLevelCell(iCell) == 0) minLevelCell(iCell)=nVertLevels+1 
       end do
+
       do iEdge = 1, nEdgesAll
          minLevelEdgeTop(iEdge) = &
             min( minLevelCell(cellsOnEdge(1,iEdge)), &

@@ -2580,6 +2580,12 @@
 		<var name="boundaryCell" type="integer" dimensions="nVertLevels nCells"
 			 description="Mask for determining boundary cells. A boundary cell has at least one inactive cell neighboring it."
 		/>
+		<var name="edgeMask_spatial_split_bc" type="real" dimensions="nVertLevels nEdges"
+			 description="Mask on edges that determines if computations should be done on edges."
+		/>
+		<var name="edgeMask_spatial_split_btr" type="real" dimensions="nVertLevels nEdges"
+			 description="Mask on edges that determines if computations should be done on edges."
+		/>
 		<var name="edgeMask" type="integer" dimensions="nVertLevels nEdges"
 			 description="Mask on edges that determines if computations should be done on edges."
 		/>

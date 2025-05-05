@@ -215,6 +215,7 @@ contains
       call ocn_meshCreate(domain)
       call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
       call ocn_meshCreate(domain)
+      call ocn_spatial_mode_splitting_set_edgeMask_btr(domain)
       write(6,*) ""
       write(6,*) ""
       write(6,*) "baroclinic first"

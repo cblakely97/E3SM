@@ -64,7 +64,9 @@ module ocn_spatial_mode_splitting
     !--------------------------------------------------------------------
 
     ! Multiplicative masks and vectors for various conditions
-    real(kind=RKIND), public, target, allocatable :: edgeMask_spatial_split_btr(:,:),&
+!    real(kind=RKIND), public, target, allocatable :: edgeMask_spatial_split_btr(:,:),&
+!                                                     edgeMask_spatial_split_bc(:,:)
+    real(kind=RKIND), public, pointer :: edgeMask_spatial_split_btr(:,:),&
                                                      edgeMask_spatial_split_bc(:,:)
 
     !--------------------------------------------------------------------
@@ -1450,8 +1452,8 @@ contains
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
-                        vertexDegree_bc
-    integer, pointer :: nEdgesAll_bc, nEdgesAll_btr
+                        vertexDegree_bc, nEdgesAll_bc,&
+                        nCellsAll_bc
 
     ! size info for moab
     integer :: totalNumVals, entity_type
@@ -1509,16 +1511,50 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesAll_btr)
-
-        ! exchange halos for barotropicThicknessFlux
-
-        ! TODO: test if this is actually necessary
-        call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
 
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
+        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
+                                 barotropicThicknessFluxZonal_btr)
+        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
+                                 barotropicThicknessFluxMeridional_btr)
+
+        ! exchange halos for barotropicThicknessFlux
+        ! TODO: test if this is actually necessary
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
+
+        ! reconstruct from edge based to cell-centered quantities
+        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
+                              barotropicThicknessFluxX_btr,&
+                              barotropicThicknessFluxY_btr,&
+                              barotropicThicknessFluxZ_btr,&
+                              barotropicThicknessFluxZonal_btr,&
+                              barotropicThicknessFluxMeridional_btr)
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
+         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
+
+        ! pack buffers
+        do iCell = 1,nCellsSolve_btr
+            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
+            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
+        end do
+
+        ! perform remapping
+        totalNumVals=2*nCellsSolve_btr
+        entity_type=1
+        call ocn_spatial_mode_splitting_remap_data(btrPID,&
+                                                   bcPID,&
+                                                   btrXbcPID,&
+                                                   btrGID,&
+                                                   bcGID,&
+                                                   btrXbcGID,&
+                                                   btr2bcFields_btr,&
+                                                   btr2bcFields,&
+                                                   totalNumVals,&
+                                                   entity_type,&
+                                                   btr2bcVar_btr,&
+                                                   btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
     end do
@@ -1534,28 +1570,67 @@ contains
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
+        ! get num cells/edges
+        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_bc)
+        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+        call mpas_pool_get_dimension(meshpool, 'vertexDegree', vertexDegree_bc)
+
+        ! get connectivity/etc.
+        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
+        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
+        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_bc)
+        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_bc)
+        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_bc)
+
         ! get barotropicThicknessFlux from 
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesAll_bc)
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_bc)
+        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
+                                 barotropicThicknessFluxZonal_bc)
+        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
+                                 barotropicThicknessFluxMeridional_bc)
 
-        ! interpolate using dmpar routine for now
-        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
-                                                          nEdgesAll_btr,&
-                                                          nEdgesGlobal_btr,&
-                                                          nEdgesPerProc_btr,&
-                                                          nEdgesDisplacement_btr,&
-                                                          indexToEdgeIDGathered_btr,&
-                                                          barotropicThicknessFlux_btr,&
-                                                          nEdgesAll_btr,&
-                                                          nEdgesGlobal_bc,&
-                                                          nEdgesPerProc_bc,&
-                                                          nEdgesDisplacement_bc,&
-                                                          indexToEdgeIDGathered_bc,&
-                                                          barotropicThicknessFlux_bc,&
-                                                          colValues_btr2bc,&
-                                                          rowValues_btr2bc,&
-                                                          sValues_btr2bc)
+        ! get remapped data from iMOAB
+        totalNumVals=2*nCellsSolve_bc
+        entity_type=1
+        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
+                                         btr2bcFields,&
+                                         totalNumVals,&
+                                         entity_type,&
+                                         btr2bcVar)
+        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
+
+        ! unpack buffers
+        do iCell = 1,nCellsSolve_bc
+            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
+            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
+        end do
+
+        ! exchange halos
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
+
+        ! put into edge-based arrays
+        barotropicThicknessFlux_bc(:)=0d0
+        do iEdge = 1,nEdgesSolve_bc
+           cell1 = cellsOnEdge_bc(1, iEdge)
+           cell2 = cellsOnEdge_bc(2,iEdge)
+           if (cell2.eq.nCellsAll_bc+1) then
+              cell2=cell1
+           endif
+           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
+                                 barotropicThicknessFluxZonal_bc(cell2))
+           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
+                                      barotropicThicknessFluxMeridional_bc(cell2))
+           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
+                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
+                                            sin(angleEdge_bc(iEdge))*meridional_edge
+           cell2 = cellsOnEdge_bc(2,iEdge)
+           if (cell2.eq.nCellsAll_bc+1) then
+              cell2=cell1
+           endif
+        end do
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
 
@@ -1815,14 +1890,11 @@ contains
 
     ! reset edgeMask appropriately if on baroclinic domain
     if (domain % domainID .eq. 0) then
+       ! populate edgeMask with edgeMask_spatial_split_bc
        do iEdge=1,nEdgesAll
-          cell1=cellsOnEdge(1,iEdge)
-          cell2=cellsOnEdge(1,iEdge)
-          if (cell1.EQ.nCellsAll+1.OR.cell2.EQ.nCellsAll+1) then
-             do k = 1,maxLevelEdgeTop(iEdge)
-                edgeMask(k,iEdge)=1d0
-             enddo
-          endif
+          do k=1,nVertLevels
+             edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+          enddo
        enddo
     endif
 
@@ -2311,7 +2383,6 @@ contains
                                                          indexToEdgeIDGathered_btr,&
                                                          nEdgesPerProc_btr)
 
-!-------------------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_dmpar_init_btr !}}}
 
@@ -2359,43 +2430,123 @@ contains
     integer, dimension(:), pointer :: maxLevelEdgeTop_bc, maxLevelCell_bc
 
     ! for loops
-    integer :: iEdge, k
+    integer :: iCell, iVertex, iEdge, k, kmin, kmax
 
     !
-    integer :: cell1,cell2
+    integer :: cell1,cell2,vertex1,vertex2
+
+    !
+    integer :: edge_index, vertex_index, cell_index
+
+    logical :: is_boundary_edge, is_boundary_cell
+
+    integer :: nVerticesOnEdge=2
 
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
-    allocate( edgeMask_spatial_split_btr(nVertLevels, nEdgesAll+1) )
-    allocate( edgeMask_spatial_split_bc(nVertLevels, nEdgesAll+1) )
-    edgeMask_spatial_split_btr(:,:)=0d0
-    edgeMask_spatial_split_bc(:,:)=0d0
+!    allocate( edgeMask_spatial_split_btr(nVertLevels, nEdgesAll+1) )
+!    allocate( edgeMask_spatial_split_bc(nVertLevels, nEdgesAll+1) )
+!    edgeMask_spatial_split_btr(:,:)=0d0
+!    edgeMask_spatial_split_bc(:,:)=0d0
 
     ! get bottom depth of baroclinic mesh
     call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+    call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_bc',edgeMask_spatial_split_bc)
+    call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_btr',edgeMask_spatial_split_btr)
     call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth_bc)
     call mpas_pool_get_array(meshPool, 'maxLevelCell',maxLevelCell_bc)
     call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop',maxLevelEdgeTop_bc)
     call mpas_pool_get_array(meshPool, 'cellsOnEdge',cellsOnEdge_bc)
 
+    ! we want edgeMask_btr to essentially be the same as edge mask but with boundary cells having
+    ! values of 1 down to maxLevelCell
+    edgeMask_spatial_split_btr(:,:)=0d0
+
+    ! recreate edgeMask
     do iEdge=1,nEdgesAll
-       cell1=cellsOnEdge(1,iEdge)
-       cell2=cellsOnEdge(1,iEdge)
-       do k = minLevelEdgeBot(iEdge),maxLevelEdgeTop(iEdge)
+       do k=minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
           edgeMask_spatial_split_btr(k,iEdge)=1d0
-          edgeMask_spatial_split_bc(k,iEdge)=edgeMask(k,iEdge)
        enddo
-       if (cell1.EQ.nCellsAll+1.OR.cell2.EQ.nCellsAll+1) then
-          do k = 1,maxLevelEdgeTop(iEdge)
-             edgeMask_spatial_split_btr(k,iEdge)=1d0
-             edgeMask(k,iEdge)=1d0
+    enddo
+
+    ! check boundary cells and fill them out
+    do iCell=1,nCellsAll
+       is_boundary_cell=.FALSE.
+       do iEdge=1,nEdgesOnCell(iCell)
+         cell2=cellsOnEdge(2,edgesOnCell(iEdge,iCell))
+         if (cell2.EQ.nCellsAll+1) then
+            is_boundary_cell=.TRUE.
+         endif
+       enddo
+       if (is_boundary_cell) then
+          ! identify kmax 
+          kmax=maxLevelCell(iCell)
+          do k=1,maxEdges
+             cell1=cellsOnCell(k,iCell)
+             if (maxLevelCell(cell1).EQ.0) then
+                cycle
+             endif
+             kmax=MIN(kmax,maxLevelCell(cell1))
+          enddo
+          do iEdge=1,nEdgesOnCell(iCell)
+             do k=1,kmax
+                edgeMask_spatial_split_btr(k,edgesOnCell(iEdge,iCell))=1d0
+             enddo
           enddo
        endif
     enddo
 
+    ! we want edgeMask_bc to have zeroes on all edges which are only part of boundary cells. This
+    ! happens when at least one vertex of an edge has a value of nCellsAll+1 in cellsOnVertex
+    edgeMask_spatial_split_bc(:,:)=0d0
 
+    ! recreate edgeMask
+    do iEdge=1,nEdgesAll
+       do k=minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
+          edgeMask_spatial_split_bc(k,iEdge)=1d0
+       enddo
+    enddo
+
+    ! check boundary cells and fill them out
+    do iCell=1,nCellsAll
+       is_boundary_cell=.FALSE.
+       do iEdge=1,nEdgesOnCell(iCell)
+         edge_index=edgesOnCell(iEdge,iCell)
+         cell2=cellsOnEdge(2,edge_index)
+         if (cell2.EQ.nCellsAll+1) then
+            is_boundary_cell=.TRUE.
+         endif
+       enddo
+       if (is_boundary_cell) then
+          do iEdge=1,nEdgesOnCell(iCell)
+             edge_index=edgesOnCell(iEdge,iCell)
+             is_boundary_edge=.FALSE.
+             do iVertex=1,nVerticesOnEdge
+               vertex_index=verticesOnEdge(iVertex,edge_index)
+               do cell1=1,vertexDegree
+                  cell2=cellsOnVertex(cell1,vertex_index)
+                  if (cell2.EQ.nCellsAll+1) then
+                     is_boundary_edge=.TRUE.
+                  endif
+               enddo
+             enddo
+             if (is_boundary_edge) then
+                do k=minLevelEdgeTop(edge_index),maxLevelEdgeTop(edge_index)
+                   edgeMask_spatial_split_bc(k,edge_index)=0d0
+                enddo
+             endif
+          enddo
+       endif
+    enddo
+
+    ! populate edgeMask with edgeMask_spatial_split_bc
+    do iEdge=1,nEdgesAll
+       do k=1,nVertLevels
+          edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+       enddo
+    enddo
 
 !-------------------------------------------------------------------------------
 
