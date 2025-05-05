@@ -1850,7 +1850,6 @@ module ocn_time_integration_split
                                              nVertLevels)
             call ocn_MLE_add_to_transport_vel(uTemp, nEdges)
 
-            normalTransportVelocity(:,:)=0d0
             normalTransportVelocityMax=-1000d0
             normalTransportVelocityMin=1000d0
 

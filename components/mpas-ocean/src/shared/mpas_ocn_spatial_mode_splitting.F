@@ -2442,23 +2442,35 @@ contains
 
     integer :: nVerticesOnEdge=2
 
+    ! for identifying both cells which are on the boundary and cells which border those on the
+    ! boundary
+    integer, dimension(:), allocatable :: isBoundaryCell, isBoundaryEdge
+
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
-!    allocate( edgeMask_spatial_split_btr(nVertLevels, nEdgesAll+1) )
-!    allocate( edgeMask_spatial_split_bc(nVertLevels, nEdgesAll+1) )
-!    edgeMask_spatial_split_btr(:,:)=0d0
-!    edgeMask_spatial_split_bc(:,:)=0d0
+    ! preallocate our arrays to tag boundary cells and boundary edges
+    allocate( isBoundaryCell(nCellsAll+1), isBoundaryEdge(nEdgesAll+1) )
+    isBoundaryCell(:)=0
+    isBoundaryEdge(:)=0
+
+    ! loop over all cells and identify all boundary cells
+    do iCell=1,nCellsAll
+       do iEdge=1,nEdgesOnCell(iCell)
+          edge_index=edgesOnCell(iEdge,iCell)
+          ! only have to check if cell2=nCellsAll+1 since cell1 never will
+          cell2=cellsOnEdge(2,edge_index)
+          if (cell2.EQ.nCellsAll+1) then
+             isBoundaryCell(iCell)=1
+          endif
+       enddo
+    enddo
 
     ! get bottom depth of baroclinic mesh
     call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
     call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_bc',edgeMask_spatial_split_bc)
     call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_btr',edgeMask_spatial_split_btr)
-    call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth_bc)
-    call mpas_pool_get_array(meshPool, 'maxLevelCell',maxLevelCell_bc)
-    call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop',maxLevelEdgeTop_bc)
-    call mpas_pool_get_array(meshPool, 'cellsOnEdge',cellsOnEdge_bc)
 
     ! we want edgeMask_btr to essentially be the same as edge mask but with boundary cells having
     ! values of 1 down to maxLevelCell
@@ -2473,14 +2485,7 @@ contains
 
     ! check boundary cells and fill them out
     do iCell=1,nCellsAll
-       is_boundary_cell=.FALSE.
-       do iEdge=1,nEdgesOnCell(iCell)
-         cell2=cellsOnEdge(2,edgesOnCell(iEdge,iCell))
-         if (cell2.EQ.nCellsAll+1) then
-            is_boundary_cell=.TRUE.
-         endif
-       enddo
-       if (is_boundary_cell) then
+       if (isBoundaryCell(iCell).EQ.1) then
           ! identify kmax 
           kmax=maxLevelCell(iCell)
           do k=1,maxEdges
@@ -2509,38 +2514,25 @@ contains
        enddo
     enddo
 
-    ! check boundary cells and fill them out
-    do iCell=1,nCellsAll
-       is_boundary_cell=.FALSE.
-       do iEdge=1,nEdgesOnCell(iCell)
-         edge_index=edgesOnCell(iEdge,iCell)
-         cell2=cellsOnEdge(2,edge_index)
-         if (cell2.EQ.nCellsAll+1) then
-            is_boundary_cell=.TRUE.
-         endif
-       enddo
-       if (is_boundary_cell) then
-          do iEdge=1,nEdgesOnCell(iCell)
+    do iCell=1,nCellsAll+1
+       if (isBoundaryCell(iCell).EQ.1) then
+          do iEdge = 1,nEdgesOnCell(iCell)
              edge_index=edgesOnCell(iEdge,iCell)
-             is_boundary_edge=.FALSE.
-             do iVertex=1,nVerticesOnEdge
-               vertex_index=verticesOnEdge(iVertex,edge_index)
-               do cell1=1,vertexDegree
-                  cell2=cellsOnVertex(cell1,vertex_index)
-                  if (cell2.EQ.nCellsAll+1) then
-                     is_boundary_edge=.TRUE.
-                  endif
-               enddo
-             enddo
-             if (is_boundary_edge) then
-                do k=minLevelEdgeTop(edge_index),maxLevelEdgeTop(edge_index)
-                   edgeMask_spatial_split_bc(k,edge_index)=0d0
-                enddo
-             endif
+             edgeMask_spatial_split_bc(:,edge_index)=0d0
           enddo
        endif
     enddo
 
+
+    ! find all the ``boundary'' edges
+!    do iEdge=1,nEdgesAll
+!       if (isBoundaryEdge(iEdge).EQ.1) then
+!          do k = minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
+!             edgeMask_spatial_split_bc(k,iEdge)=0d0
+!          enddo
+!       endif
+!    enddo
+!
     ! populate edgeMask with edgeMask_spatial_split_bc
     do iEdge=1,nEdgesAll
        do k=1,nVertLevels
