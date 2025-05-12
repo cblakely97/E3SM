@@ -856,6 +856,10 @@ contains
          kmax = maxLevelEdgeTop(iEdge)
          cell1 = cellsOnEdge(1,iEdge)
          cell2 = cellsOnEdge(2,iEdge)
+         if (cell2.EQ.nCellsAll+1) then
+            cell2=cell1
+            kmax=maxLevelCell(cell1)
+         endif
          do k = 1,nVertLevels
             ! initialize layerThicknessEdgeMean to avoid divide by
             ! zero and NaN problems.
@@ -915,6 +919,10 @@ contains
             kmax = maxLevelEdgeTop(iEdge)
             cell1 = cellsOnEdge(1,iEdge)
             cell2 = cellsOnEdge(2,iEdge)
+            if (cell2.EQ.nCellsAll+1) then
+               cell2=cell1
+               kmax=maxLevelCell(cell1)
+            endif
             do k=1,nVertLevels
                ! initialize layerThicknessEdgeFlux to avoid divide by
                ! zero and NaN problems.
@@ -1016,6 +1024,10 @@ contains
             kmax = maxLevelEdgeTop(iEdge)
             cell1 = cellsOnEdge(1,iEdge)
             cell2 = cellsOnEdge(2,iEdge)
+            if (cell2.EQ.nCellsAll+1) then
+               cell2=cell1
+               kmax=maxLevelCell(cell1)
+            endif
             do k = 1,nVertLevels
                ! initialize layerThicknessEdgeMean to avoid divide by
                ! zero and NaN problems.
@@ -1606,32 +1618,32 @@ contains
          RiTopOfCell(:,iCell) = 100.0_RKIND
          RiTopOfCellNorm(:) = 1.0E-12_RKIND
            do i = 1, nEdgesOnCell(iCell)
-             iEdge = edgesOnCell(i, iCell)
-            jCell = cellsOnCell(i,iCell)
-            do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
-               delU2 = (normalVelocity(k-1,iEdge) - normalVelocity(k,iEdge))**2 + &
-                  ( tangentialVelocity(k-1,iEdge) - tangentialVelocity(k,iEdge))**2
+              iEdge = edgesOnCell(i, iCell)
+              jCell = cellsOnCell(i,iCell)
+              do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+                 delU2 = (normalVelocity(k-1,iEdge) - normalVelocity(k,iEdge))**2 + &
+                    ( tangentialVelocity(k-1,iEdge) - tangentialVelocity(k,iEdge))**2
 
-               dz_edge = 0.5_RKIND * ( &
-                  zMid(k-1,iCell) + zMid(k-1,jCell) - &
-                  zMid(k-0,iCell) - zMid(k-0,jCell) )
-
-               shear = delU2 / dz_edge**2
-
-               Ri_edge = max(0.0_RKIND, 0.5_RKIND * ( &
-                  BruntVaisalaFreqTop(k,iCell) + &
-                  BruntVaisalaFreqTop(k,jCell) ) )/ (shear + 1.0E-12_RKIND)
-
-               RiTopOfCellNorm(k) = RiTopOfCellNorm(k) &
-                                    + 0.25_RKIND * dcEdge(iEdge) * dvEdge(iEdge)
-
-               RiTopOfCell(k,iCell) = &
-               RiTopOfCell(k,iCell) + 0.25_RKIND * dcEdge(iEdge) * dvEdge(iEdge) * Ri_edge
-           enddo
-           enddo
+                 dz_edge = 0.5_RKIND * ( &
+                    zMid(k-1,iCell) + zMid(k-1,jCell) - &
+                    zMid(k-0,iCell) - zMid(k-0,jCell) )
+ 
+                 shear = delU2 / dz_edge**2
+ 
+                 Ri_edge = max(0.0_RKIND, 0.5_RKIND * ( &
+                    BruntVaisalaFreqTop(k,iCell) + &
+                    BruntVaisalaFreqTop(k,jCell) ) )/ (shear + 1.0E-12_RKIND)
+ 
+                 RiTopOfCellNorm(k) = RiTopOfCellNorm(k) &
+                                      + 0.25_RKIND * dcEdge(iEdge) * dvEdge(iEdge)
+ 
+                 RiTopOfCell(k,iCell) = &
+                 RiTopOfCell(k,iCell) + 0.25_RKIND * dcEdge(iEdge) * dvEdge(iEdge) * Ri_edge
+               enddo
+            enddo
          do k = minLevelCell(iCell), maxLevelCell(iCell)
             RiTopOfCell(k,iCell) = RiTopOfCell(k,iCell) / RiTopOfCellNorm(k)
-          end do
+         end do
       end do
 #ifndef MPAS_OPENACC
       !$omp end do
@@ -2932,6 +2944,9 @@ contains
          div_hu,       &! divergence of (thickness*velocity)
          ALE_Thickness  ! ALE thickness at new time
 
+      ! CPB: spatial mode splitting
+      integer :: cell2
+
       ! End preamble
       !-----------------------------------------------------------------
       ! Begin code
@@ -2979,6 +2994,12 @@ contains
             iEdge = edgesOnCell(i, iCell)
             kmin = minLevelEdgeBot(iEdge)
             kmax = maxLevelEdgeTop(iEdge)
+
+            ! CPB TODO: make this more elegant
+            if (kmax.eq.0) then
+               kmax=maxLevelCell(iCell)
+            endif
+
 
             do k = kmin, kmax
                flux = layerThicknessEdgeFlux(k,iEdge)* &

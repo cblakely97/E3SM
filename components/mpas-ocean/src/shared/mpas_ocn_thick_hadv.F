@@ -108,7 +108,7 @@ contains
       !
       !-----------------------------------------------------------------
 
-      integer :: iEdge, k, i, iCell
+      integer :: iEdge, k, i, iCell, kmin, kmax
 
       real (kind=RKIND) :: flux, invAreaCell
 
@@ -140,7 +140,12 @@ contains
         invAreaCell = 1.0_RKIND / areaCell(iCell)
         do i = 1, nEdgesOnCell(iCell)
           iEdge = edgesOnCell(i, iCell)
-          do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+          kmin=minLevelEdgeBot(iEdge)
+          kmax=maxLevelEdgeTop(iEdge)
+          if (kmax.EQ.0) then
+             kmax=maxLevelCell(iCell)
+          endif
+          do k = kmin,kmax
             flux = normalVelocity(k, iEdge) * dvEdge(iEdge) * layerThickEdgeFlux(k, iEdge)
             tend(k, iCell) = tend(k, iCell) + edgeSignOnCell(i, iCell) * flux * invAreaCell
           end do

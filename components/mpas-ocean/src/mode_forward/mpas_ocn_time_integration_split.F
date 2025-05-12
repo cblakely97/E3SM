@@ -292,7 +292,7 @@ module ocn_time_integration_split
       type (mpas_pool_type), pointer :: meshPool_bc, meshPool_btr
       real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
       real (kind=RKIND), dimension(:,:), pointer :: edgeMask_btr, edgeMask_bc
-      integer :: maxLevelIndex
+      integer :: kmax
       real (kind=RKIND) :: normalTransportVelocityMax, normalTransportVelocityMin
 
       ! These are public variables used from the diagnostics module
@@ -759,8 +759,10 @@ module ocn_time_integration_split
 #endif
          ! CPB NOTE: This is where the velocity tendency is calculated. After this call we no longer
          ! need the total velocity ($\boldsymbol{u_k^*}$)
+         !write(6,*) "about to enter ocn_tend_vel"
          call ocn_tend_vel(domain, tendPool, statePool, forcingPool, &
                            stage1_tend_time, domain % dminfo, dt)
+         !write(6,*) "outside ocn_tend_vel"
 
          call mpas_timer_stop('se bcl vel tend')
 
@@ -789,12 +791,17 @@ module ocn_time_integration_split
             do iEdge = 1, nEdgesOwned
                cell1 = cellsOnEdge(1,iEdge)
                cell2 = cellsOnEdge(2,iEdge)
+               kmax=maxLevelEdgeTop(iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  cell2=cell1
+                  kmax=maxLevelCell(cell1)
+               endif
                ! could put this after with uTemp(maxleveledgetop+1:nvertlevels)=0
                uTemp(:,iEdge) = 0.0_RKIND
                sshGrad = splitFact * gravity * &
                          (sshNew(cell2) - sshNew(cell1)) &
                          /dcEdge(iEdge)
-               do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+               do k = minLevelEdgeBot(iEdge), kmax
 
                   ! normalBaroclinicVelocityNew =
                   ! normalBaroclinicVelocityOld +
@@ -819,7 +826,7 @@ module ocn_time_integration_split
                                         uTemp(minLevelEdgeBot(iEdge),iEdge)
                thicknessSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
 
-               do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+               do k = minLevelEdgeBot(iEdge)+1, kmax
                   normalThicknessFluxSum = normalThicknessFluxSum + &
                                  layerThickEdgeFlux(k,iEdge)*uTemp(k,iEdge)
                   thicknessSum = thicknessSum + &
@@ -828,7 +835,7 @@ module ocn_time_integration_split
                barotropicForcing(iEdge) = splitFact* &
                               normalThicknessFluxSum/thicknessSum/dt
 
-               do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+               do k = minLevelEdgeBot(iEdge), kmax
                   ! These two steps are together here:
                   !{\bf u}'_{k,n+1} =
                   !    {\bf u}'_{k,n} - \Delta t {\overline {\bf G}}
@@ -838,6 +845,8 @@ module ocn_time_integration_split
                   normalBaroclinicVelocityNew(k,iEdge) = 0.5_RKIND*( &
                   normalBaroclinicVelocityCur(k,iEdge) + uTemp(k,iEdge) - &
                          dt * barotropicForcing(iEdge))
+
+                  normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
 
                enddo
 
@@ -852,8 +861,13 @@ module ocn_time_integration_split
             do iEdge = 1, nEdgesHalo(config_num_halos+1)
                cell1 = cellsOnEdge(1,iEdge)
                cell2 = cellsOnEdge(2,iEdge)
+               kmax=maxLevelEdgeTop(iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  cell2=cell1
+                  kmax=maxLevelCell(cell1)
+               endif
                baroclinicThickness(iEdge) = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
-               do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+               do k = minLevelEdgeBot(iEdge)+1, kmax
                   baroclinicThickness(iEdge) = baroclinicThickness(iEdge) + &
                                  layerThickEdgeFlux(k,iEdge)
                enddo
@@ -878,15 +892,15 @@ module ocn_time_integration_split
 
          call mpas_timer_stop("se bcl vel")
 
-         write(6,*) "splitExplicitStep=",splitExplicitStep
-         write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
-         write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
-         write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-         write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-         write(6,*) "maxval(barotropicForcing)=",maxval(barotropicForcing)
-         write(6,*) "minval(barotropicForcing)=",minval(barotropicForcing)
-         write(6,*) "maxval(baroclinicThickness)=",maxval(baroclinicThickness)
-         write(6,*) "minval(baroclinicThickness)=",minval(baroclinicThickness)
+!         write(6,*) "splitExplicitStep=",splitExplicitStep
+!         write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
+!         write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
+!         write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
+!         write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
+!         write(6,*) "maxval(barotropicForcing)=",maxval(barotropicForcing)
+!         write(6,*) "minval(barotropicForcing)=",minval(barotropicForcing)
+!         write(6,*) "maxval(baroclinicThickness)=",maxval(baroclinicThickness)
+!         write(6,*) "minval(baroclinicThickness)=",minval(baroclinicThickness)
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! END baroclinic iterations on linear Coriolis term
@@ -930,9 +944,11 @@ module ocn_time_integration_split
            allocate(baroclinicThickness(nEdgesAll+1))
            baroclinicThickness(:)=0d0
            do iEdge=1,nEdgesAll
-              if (maxLevelEdgeTop(iEdge) == 0) cycle
               cell1 = cellsOnEdge(1,iEdge)
               cell2 = cellsOnEdge(2,iEdge)
+              if (cell2.EQ.nCellsAll+1) then
+                 cell2=cell1
+              endif
 
               ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
               baroclinicThickness(iEdge)=MIN(bottomDepth_btr(cell1),bottomDepth_btr(cell2))
@@ -1801,8 +1817,6 @@ module ocn_time_integration_split
               baroclinicThickness(:)=baroclinicThickness_bc(:)
               deallocate(baroclinicThickness_bc)
 
-              write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
-              write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
               ! set normalBarotropicVelocityNew to 0 since we calculate it later
               do iEdge = 1,nEdgesAll
                 normalBarotropicVelocityNew(iEdge)=0d0
@@ -1877,15 +1891,21 @@ module ocn_time_integration_split
             !$omp         thicknessSum, normalVelocityCorrection)
             do iEdge = 1, nEdges
 
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+               kmax=maxLevelEdgeTop(iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  cell2=cell1
+                  kmax=maxLevelCell(cell1)
+               endif
+
                if (thickEdgeFluxChoice == thickEdgeFluxUpwind) then
-                  cell1 = cellsOnEdge(1,iEdge)
-                  cell2 = cellsOnEdge(2,iEdge)
                   do k=1,nVertLevels
                      ! initialize layerThickEdgeFlux to avoid divide by
                      ! zero and NaN problems.
                      layerThickEdgeFlux(k,iEdge) = -1.0e34_RKIND
                   end do
-                  do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+                  do k = minLevelEdgeBot(iEdge), kmax
                      if (uTemp(k,iEdge) > 0.0_RKIND) then
                         layerThickEdgeFlux(k,iEdge) = layerThicknessCur(k,cell1)
                      elseif (uTemp(k,iEdge) < 0.0_RKIND) then
@@ -1897,12 +1917,6 @@ module ocn_time_integration_split
                      end if
 
                   end do
-                  ! for spatial mode splitting
-                  if (config_spatial_mode_splitting.AND.(cell2.EQ.nCellsAll+1)) then
-                     do k = minLevelCell(cell1),maxLevelCell(cell1)
-                        layerThickEdgeFlux(k,iEdge)=layerThicknessCur(k,cell1)
-                     enddo
-                  endif
                endif
                ! thicknessSum is initialized outside the loop because
                ! on land boundaries maxLevelEdgeTop=0, but I want to
@@ -1914,13 +1928,8 @@ module ocn_time_integration_split
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
                                            normalBaroclinicVelocityNew(minLevelEdgeBot(iEdge),iEdge)
                   thicknessSum  = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
-                  cell2 = cellsOnEdge(2,iEdge)
 
-                  maxLevelIndex=maxLevelEdgeTop(iEdge)
-                  if (cell2.EQ.nCellsAll+1) then
-                     maxLevelIndex=maxLevelCell(cell1)
-                  endif
-                  do k = minLevelEdgeBot(iEdge)+1, maxLevelIndex
+                  do k = minLevelEdgeBot(iEdge)+1, kmax
                      normalThicknessFluxSum = normalThicknessFluxSum + &
                                               layerThickEdgeFlux(k,iEdge)*&
                                               normalBaroclinicVelocityNew(k,iEdge)
@@ -1932,12 +1941,20 @@ module ocn_time_integration_split
                   ! domain to have no baroclinic flux there
                   normalVelocityCorrection = useVelocityCorrection* &
                                 ((barotropicThicknessFlux(iEdge) - &
-                                  edgeMask_bc(1,iEdge)*normalThicknessFluxSum)/thicknessSum)
+                                  normalThicknessFluxSum)/thicknessSum)
 
                   ! Because of reformulation, the "barotropic velocity" is now equal to the total
                   ! velocity correction
                   normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
-                  cell2 = cellsOnEdge(2,iEdge)
+
+                  if (cellsOnEdge(2,iEdge).EQ.nCellsAll+1) then
+                     write(6,*) "iEdge=",iEdge
+                     write(6,*) "cell1=",cell1
+                     write(6,*) "thicknessSum=",thicknessSum
+                     write(6,*) "normalThicknessFluxSum=",normalThicknessFluxSum
+                     write(6,*) 'barotropicThicknessFlux(iEdge)=',normalVelocityCorrection
+                     write(6,*) 'normalBarotropicVelocityNew(iEdge)=',normalVelocityCorrection
+                  endif
 
                else
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
@@ -1967,7 +1984,7 @@ module ocn_time_integration_split
                   ! This is the velocity used in advective terms for layerThickness
                   ! and tracers in tendency calls in stage 3.
                   ! CPB NOTE: at this point for spatial split, normalTransportVelocity will be zero
-                  ! at the edges but we want to let the baroclinic transport happen
+                  ! at the edges but we want to let the barotropic transport happen
                   normalTransportVelocity(k,iEdge) = edgeMask_btr(k,iEdge)*( &
                              normalTransportVelocity(k,iEdge) + &
                              normalVelocityCorrection)
@@ -1979,10 +1996,10 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 
-            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-            write(6,*) "maxval(normalTransportVelocity)=",normalTransportVelocityMax
-            write(6,*) "minval(normalTransportVelocity)=",normalTransportVelocityMin
+!            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
+!            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
+!            write(6,*) "maxval(normalTransportVelocity)=",normalTransportVelocityMax
+!            write(6,*) "minval(normalTransportVelocity)=",normalTransportVelocityMin
 
             deallocate(uTemp)
 
@@ -2256,13 +2273,13 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 #endif
-            write(6,*) "after resetting for second iteration"
-            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-            write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
-            write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
-            write(6,*) "maxval(normalVelocityNew)=",maxval(normalVelocityNew)
-            write(6,*) "minval(normalVelocityNew)=",minval(normalVelocityNew)
+!            write(6,*) "after resetting for second iteration"
+!            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
+!            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
+!            write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
+!            write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
+!            write(6,*) "maxval(normalVelocityNew)=",maxval(normalVelocityNew)
+!            write(6,*) "minval(normalVelocityNew)=",minval(normalVelocityNew)
 
             ! Efficiency note: We really only need this to compute
             ! layerThickEdgeFlux, density, pressure, and SSH
@@ -2608,11 +2625,17 @@ module ocn_time_integration_split
             !$omp do schedule(runtime) private(k)
 #endif
             do iEdge = 1, nEdgesAll
+               cell1=cellsOnEdge(1,iEdge)
+               cell2=cellsOnEdge(2,iEdge)
+               kmax=maxLevelEdgeTop(iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  kmax=maxLevelCell(cell1)
+               endif
 #ifdef MPAS_OPENACC
             !$acc loop vector
 #endif
             !TODO: fix these limits for spatial mode splitting
-            do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+            do k = minLevelEdgeBot(iEdge), kmax
                normalVelocityNew(k,iEdge) = &
                                normalBarotropicVelocityNew(iEdge) + &
                              2*normalBaroclinicVelocityNew(k,iEdge) - &
@@ -3267,9 +3290,13 @@ module ocn_time_integration_split
             endif
 
             do iEdge = 1, nEdges
+               kmax  = maxLevelEdgeTop(iEdge)
                cell1 = cellsOnEdge(1,iEdge)
                cell2 = cellsOnEdge(2,iEdge)
-               kmax  = maxLevelEdgeTop(iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  cell2=cell1
+                  kmax=maxLevelCell(cell1)
+               endif
 
                ! normalBarotropicVelocity = sum(h*u)/sum(h) on each edge
                ! ocn_diagnostic_solve has not yet been called, so

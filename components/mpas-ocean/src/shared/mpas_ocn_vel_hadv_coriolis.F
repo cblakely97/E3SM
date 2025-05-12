@@ -224,6 +224,9 @@ contains
 
          do j = 1, nEdgesOnEdge(iEdge)
             eoe = edgesOnEdge(j, iEdge)
+            if (eoe.EQ.nEdgesAll+1) then
+               eoe=iEdge
+            endif
             edgeWeight = weightsOnEdge(j, iEdge)
 
             do k = kmin, kmax

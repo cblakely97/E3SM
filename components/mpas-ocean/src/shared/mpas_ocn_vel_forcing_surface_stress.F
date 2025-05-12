@@ -151,6 +151,9 @@ contains
         zTop     = 0.0_RKIND
         cell1 = cellsOnEdge(1,iEdge)
         cell2 = cellsOnEdge(2,iEdge)
+        if (cell2.EQ.nCellsAll+1) then
+           cell2=cell1
+        endif
         attCoeff = 0.5_RKIND*(sfcFlxAttCoeff(cell1) &
                             + sfcFlxAttCoeff(cell2))
         attDepth = 0.0_RKIND

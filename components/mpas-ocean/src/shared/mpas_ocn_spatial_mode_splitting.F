@@ -66,6 +66,7 @@ module ocn_spatial_mode_splitting
     ! Multiplicative masks and vectors for various conditions
 !    real(kind=RKIND), public, target, allocatable :: edgeMask_spatial_split_btr(:,:),&
 !                                                     edgeMask_spatial_split_bc(:,:)
+    integer, public, target, allocatable :: maxLevelEdgeTop_spatial_split(:)
     real(kind=RKIND), public, pointer :: edgeMask_spatial_split_btr(:,:),&
                                                      edgeMask_spatial_split_bc(:,:)
 
@@ -1892,6 +1893,7 @@ contains
     if (domain % domainID .eq. 0) then
        ! populate edgeMask with edgeMask_spatial_split_bc
        do iEdge=1,nEdgesAll
+          !maxLevelEdgeTop(iEdge)=maxLevelEdgeTop_spatial_split(iEdge)
           do k=1,nVertLevels
              edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
           enddo
@@ -2539,6 +2541,20 @@ contains
           edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
        enddo
     enddo
+
+   ! populate maxLevelEdgeTop with maxLevelCell on boundary edges to ensure that we loop over the
+   ! barotropic boundary edges appropriately
+!   allocate( maxLevelEdgeTop_spatial_split(nEdgesAll) )
+!   do iEdge=1,nEdgesAll
+!      cell2=cellsOnEdge(2,iEdge)
+!      if (cell2.EQ.nCellsAll+1) then
+!         maxLevelEdgeTop_spatial_split(iEdge)=maxLevelCell(cellsOnEdge(1,iEdge))
+!         !cellsOnEdge(2,iEdge)=cellsOnEdge(1,iEdge)
+!      else
+!         maxLevelEdgeTop_spatial_split(iEdge)=maxLevelEdgeTop(iEdge)
+!      endif
+!      maxLevelEdgeTop(iEdge)=maxLevelEdgeTop_spatial_split(iEdge)
+!   enddo
 
 !-------------------------------------------------------------------------------
 
