@@ -1953,7 +1953,8 @@ module ocn_time_integration_split
                      write(6,*) "thicknessSum=",thicknessSum
                      write(6,*) "normalThicknessFluxSum=",normalThicknessFluxSum
                      write(6,*) 'barotropicThicknessFlux(iEdge)=',normalVelocityCorrection
-                     write(6,*) 'normalBarotropicVelocityNew(iEdge)=',normalVelocityCorrection
+                     write(6,*) 'normalBarotropicVelocityNew(iEdge)=',&
+                                    normalBarotropicVelocityNew(iEdge)
                   endif
 
                else

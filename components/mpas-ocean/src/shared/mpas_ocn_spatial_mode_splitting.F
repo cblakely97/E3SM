@@ -348,7 +348,7 @@ contains
 
        ! as a stopgap measure we are going to use scatter/gather
        ! initialize
-!       weights_filename_btr2bc='32km_to_!6km_weights.nc'
+!       weights_filename_btr2bc='16km_to_32km_weights.nc'
 !       call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
 !                                                            weights_filename_btr2bc,&
 !                                                            rowValues_btr2bc,&
@@ -1514,48 +1514,49 @@ contains
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
 
         ! get barotropicThicknessFlux from 
+        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicThicknessFlux')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_btr)
-
-        ! exchange halos for barotropicThicknessFlux
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
-
-        ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
-                              barotropicThicknessFluxX_btr,&
-                              barotropicThicknessFluxY_btr,&
-                              barotropicThicknessFluxZ_btr,&
-                              barotropicThicknessFluxZonal_btr,&
-                              barotropicThicknessFluxMeridional_btr)
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
-
-        ! pack buffers
-        do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        end do
-
-        ! perform remapping
-        totalNumVals=2*nCellsSolve_btr
-        entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(btrPID,&
-                                                   bcPID,&
-                                                   btrXbcPID,&
-                                                   btrGID,&
-                                                   bcGID,&
-                                                   btrXbcGID,&
-                                                   btr2bcFields_btr,&
-                                                   btr2bcFields,&
-                                                   totalNumVals,&
-                                                   entity_type,&
-                                                   btr2bcVar_btr,&
-                                                   btr2bc_weights_identifier)
+!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
+!                                 barotropicThicknessFluxZonal_btr)
+!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
+!                                 barotropicThicknessFluxMeridional_btr)
+!
+!        ! exchange halos for barotropicThicknessFlux
+!        ! TODO: test if this is actually necessary
+!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
+!
+!        ! reconstruct from edge based to cell-centered quantities
+!        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
+!                              barotropicThicknessFluxX_btr,&
+!                              barotropicThicknessFluxY_btr,&
+!                              barotropicThicknessFluxZ_btr,&
+!                              barotropicThicknessFluxZonal_btr,&
+!                              barotropicThicknessFluxMeridional_btr)
+!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
+!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
+!
+!        ! pack buffers
+!        do iCell = 1,nCellsSolve_btr
+!            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
+!            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
+!        end do
+!
+!        ! perform remapping
+!        totalNumVals=2*nCellsSolve_btr
+!        entity_type=1
+!        call ocn_spatial_mode_splitting_remap_data(btrPID,&
+!                                                   bcPID,&
+!                                                   btrXbcPID,&
+!                                                   btrGID,&
+!                                                   bcGID,&
+!                                                   btrXbcGID,&
+!                                                   btr2bcFields_btr,&
+!                                                   btr2bcFields,&
+!                                                   totalNumVals,&
+!                                                   entity_type,&
+!                                                   btr2bcVar_btr,&
+!                                                   btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
     end do
@@ -1587,51 +1588,68 @@ contains
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_bc)
+        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_btr,&
+                                  nEdgesPerProc_btr,&
+                                  nEdgesDisplacement_btr,&
+                                  indexToEdgeIDGathered_btr,&
+                                  barotropicThicknessFlux_btr,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_bc,&
+                                  nEdgesPerProc_bc,&
+                                  nEdgesDisplacement_bc,&
+                                  indexToEdgeIDGathered_bc,&
+                                  barotropicThicknessFlux_bc,&
+                                  colValues_btr2bc,&
+                                  rowValues_btr2bc,&
+                                  sValues_btr2bc)
 
-        ! get remapped data from iMOAB
-        totalNumVals=2*nCellsSolve_bc
-        entity_type=1
-        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
-                                         btr2bcFields,&
-                                         totalNumVals,&
-                                         entity_type,&
-                                         btr2bcVar)
-        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_bc
-            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-        end do
-
-        ! exchange halos
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
-
-        ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0d0
-        do iEdge = 1,nEdgesSolve_bc
-           cell1 = cellsOnEdge_bc(1, iEdge)
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           if (cell2.eq.nCellsAll_bc+1) then
-              cell2=cell1
-           endif
-           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
-                                 barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
-                                      barotropicThicknessFluxMeridional_bc(cell2))
-           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-                                            sin(angleEdge_bc(iEdge))*meridional_edge
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           if (cell2.eq.nCellsAll_bc+1) then
-              cell2=cell1
-           endif
-        end do
+!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
+!                                 barotropicThicknessFluxZonal_bc)
+!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
+!                                 barotropicThicknessFluxMeridional_bc)
+!
+!        ! get remapped data from iMOAB
+!        totalNumVals=2*nCellsSolve_bc
+!        entity_type=1
+!        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
+!                                         btr2bcFields,&
+!                                         totalNumVals,&
+!                                         entity_type,&
+!                                         btr2bcVar)
+!        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
+!
+!        ! unpack buffers
+!        do iCell = 1,nCellsSolve_bc
+!            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
+!            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
+!        end do
+!
+!        ! exchange halos
+!        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
+!        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
+!
+!        ! put into edge-based arrays
+!        barotropicThicknessFlux_bc(:)=0d0
+!        do iEdge = 1,nEdgesSolve_bc
+!           cell1 = cellsOnEdge_bc(1, iEdge)
+!           cell2 = cellsOnEdge_bc(2,iEdge)
+!           if (cell2.eq.nCellsAll_bc+1) then
+!              cell2=cell1
+!           endif
+!           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
+!                                 barotropicThicknessFluxZonal_bc(cell2))
+!           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
+!                                      barotropicThicknessFluxMeridional_bc(cell2))
+!           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
+!                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
+!                                            sin(angleEdge_bc(iEdge))*meridional_edge
+!           cell2 = cellsOnEdge_bc(2,iEdge)
+!           if (cell2.eq.nCellsAll_bc+1) then
+!              cell2=cell1
+!           endif
+!        end do
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
 
@@ -2524,6 +2542,8 @@ contains
           enddo
        endif
     enddo
+
+   ! edgeMask_spatial_split_bc(:,:)=0d0
 
 
     ! find all the ``boundary'' edges
