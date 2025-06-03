@@ -43,6 +43,7 @@ module ocn_spatial_mode_splitting
     use ocn_constants
     use ocn_config
     use ocn_vel_self_attraction_loading, only : check, interpolate
+    use ocn_vel_tidal_potential
 
     use netcdf
 
@@ -358,6 +359,7 @@ contains
 !                                                            nEdgesDisplacement_btr,&
 !                                                            indexToEdgeIDGathered_btr,&
 !                                                            nEdgesPerProc_btr)
+
     endif
 
     !--------------------------------------------------------------------
@@ -1907,6 +1909,8 @@ contains
 
     call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux', barotropicThicknessFlux)
 
+    call mpas_pool_get_array(diagnosticsPool, 'ssh_sal', ssh_sal)
+
     ! reset edgeMask appropriately if on baroclinic domain
     if (domain % domainID .eq. 0) then
        ! populate edgeMask with edgeMask_spatial_split_bc
@@ -2543,7 +2547,7 @@ contains
        endif
     enddo
 
-   ! edgeMask_spatial_split_bc(:,:)=0d0
+    edgeMask_spatial_split_bc(:,:)=0d0
 
 
     ! find all the ``boundary'' edges

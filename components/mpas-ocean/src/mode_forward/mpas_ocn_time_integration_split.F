@@ -51,6 +51,8 @@ module ocn_time_integration_split
 
    use ocn_spatial_mode_splitting
 
+   use ocn_vel_tidal_potential
+
    implicit none
    private
    save
@@ -926,6 +928,7 @@ module ocn_time_integration_split
            ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
+           write(6,*) "nCellsAll=",nCellsAll
            write(6,*) 'about to transition to barotropic domain'
            ! point nCells, nEdges, etc. to appropriate values on barotropic
            ! domain for subcycling
@@ -938,6 +941,7 @@ module ocn_time_integration_split
                                                         normalBarotropicVelocityCur,&
                                                         normalBarotropicVelocityNew,&
                                                         sshTend)
+           write(6,*) "nCellsAll=",nCellsAll
 
            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
            deallocate(baroclinicThickness)
@@ -953,6 +957,8 @@ module ocn_time_integration_split
               ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
               baroclinicThickness(iEdge)=MIN(bottomDepth_btr(cell1),bottomDepth_btr(cell2))
            enddo
+
+           call ocn_compute_tidal_potential_forcing(err)
 
          endif
 

@@ -479,7 +479,12 @@ module ocn_forward_mode
       ierr = ior(ierr, err_tmp)
       call ocn_tidal_forcing_init(err_tmp)
       ierr = ior(ierr, err_tmp)
-      call ocn_vel_tidal_potential_init(domain_ptr,err_tmp)
+      if (config_spatial_mode_splitting) then
+         call ocn_vel_tidal_potential_init(domain_ptr % next,err_tmp)
+      else
+         call ocn_vel_tidal_potential_init(domain_ptr,err_tmp)
+      endif
+
       ierr = ior(ierr, err_tmp)
       call ocn_forcing_init(err_tmp)
       ierr = ior(ierr,err_tmp)
