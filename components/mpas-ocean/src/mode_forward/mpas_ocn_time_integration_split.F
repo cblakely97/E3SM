@@ -1803,8 +1803,6 @@ module ocn_time_integration_split
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
 
-              write(6,*) "about to transition back to baroclinic domain"
-
               ! point nCells, nEdges, etc. to appropriate values on barotropic
               ! domain for subcycling
               call ocn_spatial_mode_splitting_setup_domain(domain,&
@@ -1816,6 +1814,15 @@ module ocn_time_integration_split
                                                            normalBarotropicVelocityCur,&
                                                            normalBarotropicVelocityNew,&
                                                            sshTend)
+
+!              open(unit=314,file='edgeMask.csv',action='write')
+!              do iEdge=1,nEdgesAll
+!                 write(314,'(F25.16, ",", F25.16, ",", F25.16,",",F25.16)') lonEdge(iEdge),&
+!                    latEdge(iEdge),edgeMask(1,iEdge),edgeMask_bc(1,iEdge)
+!              enddo
+!              
+!              call mpas_log_write('should fail here',MPAS_LOG_CRIT) 
+
 
               ! reassign baroclinicThickness
               deallocate(baroclinicThickness)
@@ -1952,16 +1959,6 @@ module ocn_time_integration_split
                   ! Because of reformulation, the "barotropic velocity" is now equal to the total
                   ! velocity correction
                   normalBarotropicVelocityNew(iEdge) = normalVelocityCorrection
-
-                  if (cellsOnEdge(2,iEdge).EQ.nCellsAll+1) then
-                     write(6,*) "iEdge=",iEdge
-                     write(6,*) "cell1=",cell1
-                     write(6,*) "thicknessSum=",thicknessSum
-                     write(6,*) "normalThicknessFluxSum=",normalThicknessFluxSum
-                     write(6,*) 'barotropicThicknessFlux(iEdge)=',normalVelocityCorrection
-                     write(6,*) 'normalBarotropicVelocityNew(iEdge)=',&
-                                    normalBarotropicVelocityNew(iEdge)
-                  endif
 
                else
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &

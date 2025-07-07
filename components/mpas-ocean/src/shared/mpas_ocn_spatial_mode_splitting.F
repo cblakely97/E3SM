@@ -2468,16 +2468,16 @@ contains
 
     ! for identifying both cells which are on the boundary and cells which border those on the
     ! boundary
-    integer, dimension(:), allocatable :: isBoundaryCell, isBoundaryEdge
+    integer, dimension(:), allocatable :: isBoundaryCell, isSecondRowCell
 
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
 
     ! preallocate our arrays to tag boundary cells and boundary edges
-    allocate( isBoundaryCell(nCellsAll+1), isBoundaryEdge(nEdgesAll+1) )
+    allocate( isBoundaryCell(nCellsAll+1), isSecondRowCell(nCellsAll+1))
     isBoundaryCell(:)=0
-    isBoundaryEdge(:)=0
+    isSecondRowCell(:)=0
 
     ! loop over all cells and identify all boundary cells
     do iCell=1,nCellsAll
@@ -2490,6 +2490,20 @@ contains
           endif
        enddo
     enddo
+
+    ! loop over again and find all second row cells
+    do iCell=1,nCellsAll
+       do iEdge=1,nEdgesOnCell(iCell)
+          edge_index=edgesOnCell(iEdge,iCell)
+          cell1=cellsOnEdge(1,edge_index)
+          cell2=cellsOnEdge(2,edge_index)
+          if ((isBoundaryCell(cell1).EQ.1).OR.&
+               (isBoundaryCell(cell2).EQ.1)) then
+             isSecondRowCell(iCell)=1
+          endif
+       enddo
+    enddo
+
 
     ! get bottom depth of baroclinic mesh
     call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
@@ -2538,47 +2552,28 @@ contains
        enddo
     enddo
 
-    do iCell=1,nCellsAll+1
-       if (isBoundaryCell(iCell).EQ.1) then
-          do iEdge = 1,nEdgesOnCell(iCell)
-             edge_index=edgesOnCell(iEdge,iCell)
-             edgeMask_spatial_split_bc(:,edge_index)=0d0
-          enddo
+    do iEdge=1,nEdgesAll
+       cell1=cellsOnEdge(1,iEdge)
+       cell2=cellsOnEdge(2,iEdge)
+       if ((isBoundaryCell(cell1).EQ.1).OR.(isBoundaryCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isBoundaryCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isBoundaryCell(cell2).EQ.1).AND.(isSecondRowCell(cell1).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isSecondRowCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
        endif
     enddo
 
-    edgeMask_spatial_split_bc(:,:)=0d0
+    !edgeMask_spatial_split_bc(:,:)=0d0
 
-
-    ! find all the ``boundary'' edges
-!    do iEdge=1,nEdgesAll
-!       if (isBoundaryEdge(iEdge).EQ.1) then
-!          do k = minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
-!             edgeMask_spatial_split_bc(k,iEdge)=0d0
-!          enddo
-!       endif
-!    enddo
-!
     ! populate edgeMask with edgeMask_spatial_split_bc
     do iEdge=1,nEdgesAll
        do k=1,nVertLevels
           edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
        enddo
     enddo
-
-   ! populate maxLevelEdgeTop with maxLevelCell on boundary edges to ensure that we loop over the
-   ! barotropic boundary edges appropriately
-!   allocate( maxLevelEdgeTop_spatial_split(nEdgesAll) )
-!   do iEdge=1,nEdgesAll
-!      cell2=cellsOnEdge(2,iEdge)
-!      if (cell2.EQ.nCellsAll+1) then
-!         maxLevelEdgeTop_spatial_split(iEdge)=maxLevelCell(cellsOnEdge(1,iEdge))
-!         !cellsOnEdge(2,iEdge)=cellsOnEdge(1,iEdge)
-!      else
-!         maxLevelEdgeTop_spatial_split(iEdge)=maxLevelEdgeTop(iEdge)
-!      endif
-!      maxLevelEdgeTop(iEdge)=maxLevelEdgeTop_spatial_split(iEdge)
-!   enddo
 
 !-------------------------------------------------------------------------------
 

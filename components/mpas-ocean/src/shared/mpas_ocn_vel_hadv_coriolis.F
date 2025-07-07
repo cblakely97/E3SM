@@ -236,6 +236,10 @@ contains
                qArr(k,iEdge) = qArr(k,iEdge) + &
                                edgeWeight*normalVelocity(k,eoe)* &
                                avgVorticity*layerThickEdgeFlux(k,eoe)
+               ! TODO: Check on this with Steven -- CPB
+               if (config_spatial_mode_splitting) then
+                  qArr(k,iEdge)=0d0
+               endif
             end do
 
          end do
