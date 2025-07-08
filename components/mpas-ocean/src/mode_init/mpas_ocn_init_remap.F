@@ -107,7 +107,11 @@ contains
       real (kind=RKIND), dimension(:), pointer :: angleEdge
       real (kind=RKIND), pointer :: sphere_radius
       real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
-                                             barotropicForcingMeridional_bc
+                                             barotropicForcingMeridional_bc,&
+                                             barotropicForcing_bc,&
+                                             barotropicForcing_btr,&
+                                             barotropicThicknessFlux_bc,&
+                                             barotropicThicknessFlux_btr
       real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
                                              barotropicThicknessFluxMeridional_btr
       integer, pointer :: nCellsSolve_bc, nCellsAll_bc, nCellsSolve_btr, nCellsAll_btr
@@ -157,7 +161,7 @@ contains
       call mpas_dmpar_max_real(domain % dminfo, xMax, xMaxGlobal)
       call mpas_dmpar_min_real(domain % dminfo, dcEdgeMin, dcEdgeMinGlobal)
 
-      ! zero out halos to test halo exchanges
+      ! populate barotropicForcing on the baroclinic mesh with the analytical field
       block_ptr => domain % blocklist
       do while(associated(block_ptr))
          call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
@@ -170,33 +174,32 @@ contains
          call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
          call mpas_pool_get_dimension(meshPool, 'nCellsOwned', nCellsAll_bc)
          call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingZonal',&
-                                barotropicForcingZonal_bc)
+                                'barotropicThicknessFlux',&
+                                barotropicThicknessFlux_bc)
          call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingMeridional',&
-                                barotropicForcingMeridional_bc)
+                                'barotropicForcing',&
+                                barotropicForcing_bc)
+
+         barotropicForcing_bc(:)=barotropicThicknessFlux_bc(:)
+         barotropicForcing_bc(:)=0d0
+         barotropicThicknessFlux_bc(:)=0d0
 
          block_ptr => block_ptr % next
       end do
 
-      ! zero out halos to test halo exchanges
-      block_ptr => domain_btr % blocklist
+      block_ptr => domain % next % blocklist
       do while(associated(block_ptr))
-         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
          call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
 
-         call ocn_mark_north_boundary(meshPool, yMaxGlobal, dcEdgeMinGlobal, iErr)
-         call ocn_mark_south_boundary(meshPool, yMinGlobal, dcEdgeMinGlobal, iErr)
-
          ! get input barotropicForcing on baroclinic mesh and zero out halos
-         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-         call mpas_pool_get_dimension(meshPool, 'nCellsAll', nCellsAll_btr)
          call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxZonal',&
-                                barotropicThicknessFluxZonal_btr)
+                                'barotropicThicknessFlux',&
+                                barotropicThicknessFlux_btr)
          call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxMeridional',&
-                                barotropicThicknessFluxMeridional_btr)
+                                'barotropicForcing',&
+                                barotropicForcing_btr)
+         barotropicForcing_btr(:)=0d0
+         barotropicThicknessFlux_btr(:)=0d0
 
          block_ptr => block_ptr % next
       end do
@@ -204,6 +207,24 @@ contains
       !--------------------------------------------------------------------
       ! apply an analytical field to test the remapping
       !----------------------------------------------------------------------   
+
+         write(6,*) "before:"
+         write(6,*) "on baroclinic domain, max(barotropicForcing)=",&
+      maxval(barotropicForcing_bc)
+         write(6,*) "on baroclinic domain, min(barotropicForcing)=",&
+      minval(barotropicForcing_bc)
+         write(6,*) "on baroclinic domain, max(barotropicThicknessFlux)=",&
+      maxval(barotropicThicknessFlux_bc)
+         write(6,*) "on baroclinic domain, min(barotropicThicknessFlux)=",&
+      minval(barotropicThicknessFlux_bc)
+         write(6,*) "on barotropic domain, max(barotropicForcing)=",&
+      maxval(barotropicForcing_btr)
+         write(6,*) "on barotropic domain, min(barotropicForcing)=",&
+      minval(barotropicForcing_btr)
+         write(6,*) "on barotropic domain, max(barotropicThicknessFlux)=",&
+      maxval(barotropicThicknessFlux_btr)
+         write(6,*) "on barotropic domain, min(barotropicThicknessFlux)=",&
+      minval(barotropicThicknessFlux_btr)
 
       !call ocn_init_remap_analytical_field(domain_btr)
 
@@ -249,6 +270,24 @@ contains
       write(6,*) ""
       write(6,*) ""
       call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
+
+         write(6,*) "after:"
+         write(6,*) "on baroclinic domain, max(barotropicForcing)=",&
+      maxval(barotropicForcing_bc)
+         write(6,*) "on baroclinic domain, min(barotropicForcing)=",&
+      minval(barotropicForcing_bc)
+         write(6,*) "on baroclinic domain, max(barotropicThicknessFlux)=",&
+      maxval(barotropicThicknessFlux_bc)
+         write(6,*) "on baroclinic domain, min(barotropicThicknessFlux)=",&
+      minval(barotropicThicknessFlux_bc)
+         write(6,*) "on barotropic domain, max(barotropicForcing)=",&
+      maxval(barotropicForcing_btr)
+         write(6,*) "on barotropic domain, min(barotropicForcing)=",&
+      minval(barotropicForcing_btr)
+         write(6,*) "on barotropic domain, max(barotropicThicknessFlux)=",&
+      maxval(barotropicThicknessFlux_btr)
+         write(6,*) "on barotropic domain, min(barotropicThicknessFlux)=",&
+      minval(barotropicThicknessFlux_btr)
 
       !--------------------------------------------------------------------
 

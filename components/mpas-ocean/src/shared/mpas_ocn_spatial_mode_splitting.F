@@ -299,19 +299,6 @@ contains
        call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_bc)
        call mpas_init_reconstruct(meshPool,.true.)
 
-       ! as a stopgap measure we are going to use scatter/gather
-       ! initialize
-!       write(6,*) "about to init dmpar for baroclinic"
-!       weights_filename_btr2bc='16km_to_32km_weights.nc'
-!       call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
-!                                                            weights_filename_btr2bc,&
-!                                                            rowValues_bc2btr,&
-!                                                            colValues_bc2btr,&
-!                                                            sValues_bc2btr,&
-!                                                            nEdgesGlobal_bc,&
-!                                                            nEdgesDisplacement_bc,&
-!                                                            indexToEdgeIDGathered_bc,&
-!                                                            nEdgesPerProc_bc)
        return
     elseif ( domain % domainID .eq. 1 ) then
 
@@ -346,19 +333,6 @@ contains
        call mpas_rbf_interp_initialize(meshPool)
        call mpas_initialize_tangent_vectors(meshPool, edgeTangentVectors_btr)
        call mpas_init_reconstruct(meshPool)
-
-       ! as a stopgap measure we are going to use scatter/gather
-       ! initialize
-!       weights_filename_btr2bc='16km_to_32km_weights.nc'
-!       call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
-!                                                            weights_filename_btr2bc,&
-!                                                            rowValues_btr2bc,&
-!                                                            colValues_btr2bc,&
-!                                                            sValues_btr2bc,&
-!                                                            nEdgesGlobal_btr,&
-!                                                            nEdgesDisplacement_btr,&
-!                                                            indexToEdgeIDGathered_btr,&
-!                                                            nEdgesPerProc_btr)
 
     endif
 
@@ -1284,50 +1258,8 @@ contains
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
         ! get barotropicForcing from 
+        call mpas_dmpar_field_halo_exch(domain, 'barotropicForcing')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingZonal',&
-                                 barotropicForcingZonal_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
-                                 barotropicForcingMeridional_bc)
-
-        ! exchange halos for barotropicForcing
-        ! TODO: test if this is actually necessary
-        call mpas_dmpar_field_halo_exch(domain,'barotropicForcing')
-
-        ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicForcing_bc, &
-                              barotropicForcingX_bc, &
-                              barotropicForcingY_bc, &
-                              barotropicForcingZ_bc, &
-                              barotropicForcingZonal_bc, &
-                              barotropicForcingMeridional_bc)
-
-        ! exchange halos for barotropicForcing
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingMeridional')
-         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingZonal')
-
-        ! pack buffers for iMOAB
-        do iCell = 1,nCellsSolve_bc
-            bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
-            bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
-        end do
-
-        ! perform remapping
-        totalNumVals=2*nCellsSolve_bc
-        entity_type=1
-        call ocn_spatial_mode_splitting_remap_data(bcPID,&
-                                                   btrPID,&
-                                                   bcXbtrPID,&
-                                                   bcGID,&
-                                                   btrGID,&
-                                                   bcXbtrGID,&
-                                                   bc2btrFields,&
-                                                   bc2btrFields_btr,&
-                                                   totalNumVals,&
-                                                   entity_type,&
-                                                   bc2btrVar,&
-                                                   bc2btr_weights_identifier)
 
         block_ptr => block_ptr % next
     end do
@@ -1357,59 +1289,27 @@ contains
 
         ! get barotropicForcing from pools
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingZonal',&
-                                 barotropicForcingZonal_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
-                                 barotropicForcingMeridional_btr)
+        barotropicForcing_btr(:)=0d0
 
-        ! get remapped data from iMOAB
-        totalNumVals=2*nCellsSolve_btr
-        entity_type=1
-        ierr = iMOAB_GetDoubleTagStorage(btrPID,&
-                                         bc2btrFields_btr,&
-                                         totalNumVals,&
-                                         entity_type,&
-                                         bc2btrVar_btr)
-        call errorout(ierr,"failed to get bc2btrVar_btr")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_btr
-           barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
-           barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
-        end do
-
-        ! perform halo exchange
-        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
-        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
-
-        ! put back into edge based arrays
-        barotropicForcing_btr(:) = 0d0
-        do iEdge = 1,nEdgesSolve_btr
-            cell1 = cellsOnEdge_btr(1, iEdge)
-            cell2 = cellsOnEdge_btr(2, iEdge)
-            zonal_edge = 0.5d0 * (barotropicForcingZonal_btr(cell1) + &
-                                  barotropicForcingZonal_btr(cell2))
-            meridional_edge = 0.5d0 * (barotropicForcingMeridional_btr(cell1) + &
-                                       barotropicForcingMeridional_btr(cell2))
-            barotropicForcing_btr(iedge) = barotropicForcing_btr(iEdge) + &
-                                           cos(angleEdge_btr(iEdge))*zonal_edge + &
-                                           sin(angleEdge_btr(iEdge))*meridional_edge
-        end do
-
-        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
-        call mpas_pool_get_dimension(meshPool, 'nCells', nCellsAll_btr)
-        do iEdge = 1,nEdgesAll_btr
-           cell1=cellsOnEdge_btr(1,iEdge)
-           cell2=cellsOnEdge_btr(2,iEdge)
-           if (cell1.lt.1.OR.cell1.gt.nCellsAll_btr) then
-              barotropicForcing_btr(iEdge)=0d0
-           elseif (cell2.lt.1.OR.cell2.gt.nCellsAll_btr) then
-              barotropicForcing_btr(iEdge)=0d0
-           endif
-        end do
+        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                  nEdgesSolve_bc,&
+                                  nEdgesGlobal_bc,&
+                                  nEdgesPerProc_bc,&
+                                  nEdgesDisplacement_bc,&
+                                  indexToEdgeIDGathered_bc,&
+                                  barotropicForcing_bc,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_btr,&
+                                  nEdgesPerProc_btr,&
+                                  nEdgesDisplacement_btr,&
+                                  indexToEdgeIDGathered_btr,&
+                                  barotropicForcing_btr,&
+                                  colValues_bc2btr,&
+                                  rowValues_bc2btr,&
+                                  sValues_bc2btr)
         
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcing')
-
+        
         block_ptr => block_ptr % next
     end do
 #endif
@@ -1519,46 +1419,6 @@ contains
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicThicknessFlux')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
-!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-!                                 barotropicThicknessFluxZonal_btr)
-!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-!                                 barotropicThicknessFluxMeridional_btr)
-!
-!        ! exchange halos for barotropicThicknessFlux
-!        ! TODO: test if this is actually necessary
-!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
-!
-!        ! reconstruct from edge based to cell-centered quantities
-!        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
-!                              barotropicThicknessFluxX_btr,&
-!                              barotropicThicknessFluxY_btr,&
-!                              barotropicThicknessFluxZ_btr,&
-!                              barotropicThicknessFluxZonal_btr,&
-!                              barotropicThicknessFluxMeridional_btr)
-!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-!         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
-!
-!        ! pack buffers
-!        do iCell = 1,nCellsSolve_btr
-!            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-!            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-!        end do
-!
-!        ! perform remapping
-!        totalNumVals=2*nCellsSolve_btr
-!        entity_type=1
-!        call ocn_spatial_mode_splitting_remap_data(btrPID,&
-!                                                   bcPID,&
-!                                                   btrXbcPID,&
-!                                                   btrGID,&
-!                                                   bcGID,&
-!                                                   btrXbcGID,&
-!                                                   btr2bcFields_btr,&
-!                                                   btr2bcFields,&
-!                                                   totalNumVals,&
-!                                                   entity_type,&
-!                                                   btr2bcVar_btr,&
-!                                                   btr2bc_weights_identifier)
 
         block_ptr => block_ptr % next
     end do
@@ -2123,9 +1983,9 @@ contains
     ! initialize map only on proc 0
 
     ! don't do this on baroclinic domain since we don't have the weights yet
-    if (domain % domainID .eq. 0) then
-       return
-    endif
+!    if (domain % domainID .eq. 0) then
+!       return
+!    endif
     if (curProc.eq.0) then
         ! Open netcdf weights files
         call check( nf90_open(path = trim(weights_filename), mode = nf90_nowrite, ncid = ncid) ,err)
@@ -2251,6 +2111,10 @@ contains
                 gatheredArray_source(nEdgesGlobal_source),&
                 globalArray_target(nEdgesGlobal_target),&
                 gatheredArray_target(nEdgesGlobal_target))
+       globalArray_source(:)=0d0
+       gatheredArray_source(:)=0d0
+       globalArray_target(:)=0d0
+       gatheredArray_target(:)=0d0
              
     else
        allocate(globalArray_source(1),&
@@ -2346,7 +2210,7 @@ contains
     !-----------------------------------------------------------------
     ! Begin code
 
-    weights_filename_btr2bc='16km_to_32km_weights.nc'
+    weights_filename_btr2bc='soma_weights_32km_to_16km.nc'
     call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
                                                          weights_filename_btr2bc,&
                                                          rowValues_bc2btr,&

@@ -761,10 +761,8 @@ module ocn_time_integration_split
 #endif
          ! CPB NOTE: This is where the velocity tendency is calculated. After this call we no longer
          ! need the total velocity ($\boldsymbol{u_k^*}$)
-         !write(6,*) "about to enter ocn_tend_vel"
          call ocn_tend_vel(domain, tendPool, statePool, forcingPool, &
                            stage1_tend_time, domain % dminfo, dt)
-         !write(6,*) "outside ocn_tend_vel"
 
          call mpas_timer_stop('se bcl vel tend')
 
@@ -894,15 +892,6 @@ module ocn_time_integration_split
 
          call mpas_timer_stop("se bcl vel")
 
-!         write(6,*) "splitExplicitStep=",splitExplicitStep
-!         write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
-!         write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
-!         write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-!         write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-!         write(6,*) "maxval(barotropicForcing)=",maxval(barotropicForcing)
-!         write(6,*) "minval(barotropicForcing)=",minval(barotropicForcing)
-!         write(6,*) "maxval(baroclinicThickness)=",maxval(baroclinicThickness)
-!         write(6,*) "minval(baroclinicThickness)=",minval(baroclinicThickness)
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! END baroclinic iterations on linear Coriolis term
@@ -928,8 +917,6 @@ module ocn_time_integration_split
            ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
-           write(6,*) "nCellsAll=",nCellsAll
-           write(6,*) 'about to transition to barotropic domain'
            ! point nCells, nEdges, etc. to appropriate values on barotropic
            ! domain for subcycling
            call ocn_spatial_mode_splitting_setup_domain(domain_btr,&
@@ -941,7 +928,6 @@ module ocn_time_integration_split
                                                         normalBarotropicVelocityCur,&
                                                         normalBarotropicVelocityNew,&
                                                         sshTend)
-           write(6,*) "nCellsAll=",nCellsAll
 
            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
            deallocate(baroclinicThickness)
@@ -2000,11 +1986,6 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 
-!            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-!            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-!            write(6,*) "maxval(normalTransportVelocity)=",normalTransportVelocityMax
-!            write(6,*) "minval(normalTransportVelocity)=",normalTransportVelocityMin
-
             deallocate(uTemp)
 
             call mpas_timer_stop('btr se ssh verif')
@@ -2277,13 +2258,6 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 #endif
-!            write(6,*) "after resetting for second iteration"
-!            write(6,*) "maxval(normalBarotropicVelocityNew)=",maxval(normalBarotropicVelocityNew)
-!            write(6,*) "minval(normalBarotropicVelocityNew)=",minval(normalBarotropicVelocityNew)
-!            write(6,*) "maxval(normalBaroclinicVelocityNew)=",maxval(normalBaroclinicVelocityNew)
-!            write(6,*) "minval(normalBaroclinicVelocityNew)=",minval(normalBaroclinicVelocityNew)
-!            write(6,*) "maxval(normalVelocityNew)=",maxval(normalVelocityNew)
-!            write(6,*) "minval(normalVelocityNew)=",minval(normalVelocityNew)
 
             ! Efficiency note: We really only need this to compute
             ! layerThickEdgeFlux, density, pressure, and SSH
