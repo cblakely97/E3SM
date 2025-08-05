@@ -398,9 +398,11 @@ contains
       call mpas_timer_start("ocn_tend_vel")
 
       ! Compute bulk forcing surface stress
-      call ocn_surface_bulk_forcing_vel( &
-                                    forcingPool, sfcStress, &
-                                    sfcStressMag, err)
+      if (.NOT.config_spatial_mode_splitting) then
+         call ocn_surface_bulk_forcing_vel( &
+                                       forcingPool, sfcStress, &
+                                       sfcStressMag, err)
+      endif
       ! Add top drag to surface stress
       call ocn_surface_land_ice_fluxes_vel( &
                                        sfcStress, sfcStressMag, err)
