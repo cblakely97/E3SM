@@ -682,7 +682,7 @@ contains
 !-----------------------------------------------------------------------
 
    subroutine ocn_diagnostic_solve_wctEdge(btrVelocity, deltaSSH, &
-                         baroclinicThickness, wctEdge)!{{{
+                         baroclinicThickness, wctEdge, force_upwind)!{{{
 
       !-----------------------------------------------------------------
       ! input variables
@@ -694,6 +694,7 @@ contains
                              !< substep
          baroclinicThickness !< water column thickness on edges at the last
                              !< baroclinic step (centered or upwinded)
+      logical,optional :: force_upwind
 
       !-----------------------------------------------------------------
       ! output variables
@@ -710,14 +711,21 @@ contains
       integer :: &
          iCell, iEdge, &! edge and cell loop indices
          cell1, cell2  ! neighbor cell indices across an edge
+      integer :: fluxType
 
 
       ! End preamble
       !-----------------------------------------------------------------
       ! Begin code
 
+      if (present(force_upwind)) then
+         fluxType=thickEdgeFluxUpwind
+      else
+         fluxType=thickEdgeFluxChoice
+      endif
+
       ! Compute edge flux based on option set on init
-      select case (thickEdgeFluxChoice)
+      select case (fluxType)
 
       case (thickEdgeFluxCenter)
          ! Use centered (mean) thickness as flux value

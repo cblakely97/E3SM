@@ -297,7 +297,7 @@ module ocn_time_integration_split
       real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
       real (kind=RKIND), dimension(:,:), pointer :: edgeMask_btr, edgeMask_bc
       integer :: kmax
-      real (kind=RKIND) :: windForcingTendency_tmp
+      real (kind=RKIND) :: windForcingTendency_tmp, C_drag_linear
       real (kind=RKIND), dimension(:), pointer :: surfaceStress_bc,&
                                                   surfaceStress_btr,&
                                                   surfaceStressMag_bc,&
@@ -1245,8 +1245,11 @@ module ocn_time_integration_split
                      end do
 
                      if (config_spatial_mode_splitting) then
+                        C_drag_linear=0.004_RKIND
                         windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
-                           (baroclinicThickness(iEdge)*rho_sw)
+                           (baroclinicThickness(iEdge)*rho_sw)-&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)*C_drag_linear)/&
+                           (baroclinicThickness(iEdge))
                      else
                         windForcingTendency_tmp=0d0
                      endif
@@ -1343,7 +1346,7 @@ module ocn_time_integration_split
                ! subcycle.
                if (config_spatial_mode_splitting) then
                   call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshSubcycleCur, &
-                            baroclinicThickness, wctEdge)
+                            baroclinicThickness, wctEdge,.TRUE.)
                else
                   call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
                             baroclinicThickness, wctEdge)
@@ -1559,7 +1562,9 @@ module ocn_time_integration_split
 
                      if (config_spatial_mode_splitting) then
                         windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
-                           (baroclinicThickness(iEdge)*rho_sw)
+                           (baroclinicThickness(iEdge)*rho_sw)-&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)*C_drag_linear)/&
+                           (baroclinicThickness(iEdge))
                      else
                         windForcingTendency_tmp=0d0
                      endif
@@ -1874,11 +1879,12 @@ module ocn_time_integration_split
 
               ! set normalBarotropicVelocityNew to 0 since we calculate it later
               do iEdge = 1,nEdgesAll
-                normalBarotropicVelocityNew(iEdge)=0d0
                 ! CPB Note: zero out baroclinic on edge
                 do k=1,nVertLevels
                    normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
                 enddo
+
+                normalBarotropicVelocityNew(iEdge)=0.0_RKIND
               enddo
 
             endif
@@ -2838,7 +2844,8 @@ module ocn_time_integration_split
 #endif
 
       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
-                             scratchPool, err, 2)
+                             scratchPool, err, 2, baroclinicThickness,&
+                             normalBarotropicVelocityNew,normalBaroclinicVelocityNew)
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of
