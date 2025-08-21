@@ -2525,7 +2525,8 @@ module ocn_time_integration_split
 #endif
 
       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
-                             scratchPool, err, 2)
+                             scratchPool, err, 2, baroclinicThickness,&
+                             normalBarotropicVelocityNew,normalBaroclinicVelocityNew)
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of
