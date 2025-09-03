@@ -475,7 +475,7 @@ contains
       real (kind=RKIND), dimension(:), allocatable :: A, B, C, D
       real (kind=RKIND) ::  m, gamma_1, C_drag_linear
 
-      C_drag_linear=0.004_RKIND
+      C_drag_linear=0.0003_RKIND
 
       err = 0
 
@@ -543,8 +543,7 @@ contains
                  B(k)=1.0_RKIND - A(k) - C(k)
               endif
               ! set D(k)
-              D(k)=normalBaroclinicVelocity(k,iEdge)+(1+gamma_1)*normalBarotropicVelocity(iEdge)/&
-                 (1-gamma_1)
+              D(k)=normalVelocity(k,iEdge)
 
            end do
 
