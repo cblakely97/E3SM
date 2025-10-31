@@ -406,6 +406,8 @@ contains
 
    subroutine ocn_vel_vmix_tend_implicit_linear(dt, normalBaroclinicVelocity, &
                                          normalBarotropicVelocity, baroclinicThickness,&
+                                         accumulatedDragOverDepth,&
+                                         accumulatedDrag,&
                                          vertViscTopOfEdge, layerThickness, & !{{{
                                          layerThickEdgeDrag, layerThickEdgeMean, &
                                          landIceEdgeFraction, normalVelocity, err)
@@ -425,6 +427,7 @@ contains
       real (kind=RKIND), dimension(:), intent(in) :: &
          baroclinicThickness        !< Input: kinetic energy at cell
 
+      real (kind=RKIND), dimension(:), intent(in) :: accumulatedDragOverDepth, accumulatedDrag
       real (kind=RKIND), dimension(:,:), intent(in) :: &
          vertViscTopOfEdge !< Input: vertical mixing coefficients
 
@@ -467,9 +470,10 @@ contains
       integer :: iEdge, k, cell1, cell2, N, Nsurf
 
       real (kind=RKIND), dimension(:), allocatable :: A, B, C, D
-      real (kind=RKIND) ::  m, gamma_1, C_drag_linear
+      real (kind=RKIND) ::  m, gamma_1, C_drag_linear, C_drag_quadratic
 
       C_drag_linear=0.004_RKIND
+      C_drag_quadratic=0.0025_RKIND
 
       err = 0
 
@@ -514,8 +518,6 @@ contains
            C(:)=0d0
            D(:)=0d0
 
-           ! set gamma_1 here since it won't change in loops
-           gamma_1=dt*C_drag_linear/(baroclinicThickness(iEdge))
            do k = Nsurf,N
               ! set A(k)
               if (k.EQ.1) then
@@ -534,14 +536,14 @@ contains
                     layerThickEdgeMean(k,iEdge)))
               endif
               ! set B(k)
-              if (k.EQ.N) then
-                 B(k)=1.0_RKIND-A(k)+dt*C_drag_linear/(layerThickEdgeMean(k,iEdge))
-              else
-                 B(k)=1.0_RKIND - A(k) - C(k)
-              endif
+              B(k)=1.0_RKIND - A(k) - C(k)
               ! set D(k)
-              D(k)=normalBaroclinicVelocity(k,iEdge)+(1+gamma_1)*normalBarotropicVelocity(iEdge)/&
-                 (1-gamma_1)
+              if (k.EQ.N) then
+                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedD(iEdge)&
+                    -accumulatedW(iEdge)*dt/layerThickEdgeMean(k,iEdge)
+              else
+                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedD(iEdge)
+              endif
 
            end do
 
@@ -1523,7 +1525,8 @@ contains
 !-----------------------------------------------------------------------
 
    subroutine ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, scratchPool, err,&
-      timeLevelIn,baroclinicThickness,normalBarotropicVelocity,normalBaroclinicVelocity)!{{{
+      timeLevelIn,baroclinicThickness,normalBarotropicVelocity,normalBaroclinicVelocity,&
+      accumulatedDragOverDepth,accumulatedDrag)!{{{
       real (kind=RKIND), intent(in) :: dt
       type (mpas_pool_type), intent(in) :: meshPool
       type (mpas_pool_type), intent(inout) :: statePool
@@ -1533,6 +1536,8 @@ contains
       integer, intent(in), optional :: timeLevelIn
       real(kind=RKIND), dimension(:),optional :: baroclinicThickness,normalBarotropicVelocity
       real(kind=RKIND), dimension(:,:),optional :: normalBaroclinicVelocity
+      real(kind=RKIND), dimension(:,:),optional :: accumulatedDragOverDepth
+      real(kind=RKIND), dimension(:,:),optional :: accumulatedDrag
 
       type (mpas_pool_type), pointer :: tracersPool, tracersSurfaceFluxPool
 
@@ -1694,12 +1699,9 @@ contains
       case (dragTypeConst)
 
         call ocn_vel_vmix_tend_implicit_linear(dt, normalBaroclinicVelocity,&
-          normalBarotropicVelocity, baroclinicThickness, &
+          normalBarotropicVelocity, baroclinicThickness, accumulatedDragOverDepth,accumulatedDrag,&
           vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
           landIceEdgeFraction, normalVelocity, err)
-!        call ocn_vel_vmix_tend_implicit(dt, kineticEnergyCell, &
-!          vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
-!          landIceEdgeFraction, normalVelocity, err)
 
       case (dragTypeRayleigh)
 
