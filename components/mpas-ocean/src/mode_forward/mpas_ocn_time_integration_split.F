@@ -297,11 +297,16 @@ module ocn_time_integration_split
       real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
       real (kind=RKIND), dimension(:,:), pointer :: edgeMask_btr, edgeMask_bc
       integer :: kmax
-      real (kind=RKIND) :: windForcingTendency_tmp, C_drag_linear
+      real (kind=RKIND) :: windForcingTendency_tmp, C_drag_quadratic
       real (kind=RKIND), dimension(:), pointer :: surfaceStress_bc,&
                                                   surfaceStress_btr,&
                                                   surfaceStressMag_bc,&
                                                   surfaceStressMag_btr
+
+      ! for now make accumulation variables private arrays
+      real (kind=RKIND) :: tempDragOverDepth, tempDrag, bottomDragDepth
+      real (kind=RKIND), dimension(:), allocatable :: accumulatedDragOverDepth,&
+         accumulatedDrag
 
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
@@ -439,6 +444,9 @@ module ocn_time_integration_split
       call mpas_pool_get_array(tracersPool, 'activeTracers', activeTracersNew, 2)
 
       allocate(baroclinicThickness(nEdgesAll+1))
+      allocate(accumulatedDragOverDepth(nEdgesAll+1), accumulatedDrag(nEdgesAll+1))
+      accumulatedDragOverDepth(:)=0.0_RKIND
+      accumulatedDrag(:)=0.0_RKIND
 
       if (config_transport_tests_flow_id > 0) then
         ! This is a transport test. Write advection velocity from prescribed
@@ -1223,6 +1231,9 @@ module ocn_time_integration_split
                      nEdges = nEdgesHalo(edgeHaloComputeCounter-1)
                   endif
 
+                  accumulatedDragOverDepth(:)=0.0_RKIND
+                  accumulatedDrag(:)=0.0_RKIND
+
                   !$omp parallel
                   !$omp do schedule(runtime) &
                   !$omp private(i, cell1, cell2, eoe, CoriolisTerm, &
@@ -1245,11 +1256,25 @@ module ocn_time_integration_split
                      end do
 
                      if (config_spatial_mode_splitting) then
-                        C_drag_linear=0.004_RKIND
+                        C_drag_quadratic=0.0025_RKIND
+
+                        bottomDragDepth=baroclinicThickness(iEdge)+&
+                           0.5_RKIND*(sshSubcycleCur(cell1)+sshSubcycleCur(cell2))
+
                         windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
-                           (baroclinicThickness(iEdge)*rho_sw)-&
-                           (normalBarotropicVelocitySubcycleCur(iEdge)*C_drag_linear)/&
-                           (baroclinicThickness(iEdge))
+                           (bottomDragDepth*rho_sw)
+
+                        tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
+
+                        tempDrag=C_drag_quadratic*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
                      else
                         windForcingTendency_tmp=0d0
                      endif
@@ -1260,7 +1285,11 @@ module ocn_time_integration_split
                             + dt/nBtrSubcycles*(CoriolisTerm - gravity &
                              *(sshSubcycleCur(cell2) - &
                                sshSubcycleCur(cell1))/dcEdge(iEdge) + &
-                               barotropicForcing(iEdge)+windForcingTendency_tmp))
+                               barotropicForcing(iEdge) - &
+                               tempDragOverDepth + windForcingTendency_tmp))
+
+                     accumulatedDragOverDepth(iEdge)=accumulatedDragOverDepth(iEdge)+tempDragOverDepth
+                     accumulatedDrag(iEdge)=accumulatedDrag(iEdge)+tempDrag
 
                   end do ! edges
                   !$omp end do
@@ -1529,6 +1558,9 @@ module ocn_time_integration_split
                      nEdges = nEdgesHalo(edgeHaloComputeCounter-1)
                   endif
 
+                  accumulatedDragOverDepth(:)=0.0_RKIND
+                  accumulatedDrag(:)=0.0_RKIND
+
                   !$omp parallel
                   !$omp do schedule(runtime) &
                   !$omp private(i, cell1, cell2, eoe, coriolisTerm, &
@@ -1561,10 +1593,25 @@ module ocn_time_integration_split
                                          sshSubcycleNew(cell2)
 
                      if (config_spatial_mode_splitting) then
+                        C_drag_quadratic=0.0025_RKIND
+
+                        bottomDragDepth=baroclinicThickness(iEdge)+&
+                           0.5_RKIND*(sshCell1+sshCell2)
+
                         windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
-                           (baroclinicThickness(iEdge)*rho_sw)-&
-                           (normalBarotropicVelocitySubcycleCur(iEdge)*C_drag_linear)/&
-                           (baroclinicThickness(iEdge))
+                           (bottomDragDepth*rho_sw)
+
+                        tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
+
+                        tempDrag=C_drag_quadratic*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
                      else
                         windForcingTendency_tmp=0d0
                      endif
@@ -1578,8 +1625,12 @@ module ocn_time_integration_split
                            + dt/nBtrSubcycles &
                            *(CoriolisTerm - gravity* &
                              (sshCell2 - sshCell1)/dcEdge(iEdge) &
-                           + barotropicForcing(iEdge) + &
+                           + barotropicForcing(iEdge) - &
+                             tempDragOverDepth + &
                              windForcingTendency_tmp))
+
+                     accumulatedDragOverDepth(iEdge)=accumulatedDragOverDepth(iEdge)+tempDragOverDepth
+                     accumulatedDrag(iEdge)=accumulatedDrag(iEdge)+tempDrag
 
                   end do
                   !$omp end do
@@ -1794,6 +1845,17 @@ module ocn_time_integration_split
                normalBarotropicVelocityNew(iEdge) = &
                normalBarotropicVelocityNew(iEdge) &
                      / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
+
+               normalBarotropicVelocityNew(iEdge) = &
+                  normalBarotropicVelocitySubcycleNew(iEdge)
+
+               accumulatedDragOverDepth(iEdge) = &
+                  accumulatedDragOverDepth(iEdge) &
+                      /(nBtrSubcycles*config_btr_subcycle_loop_factor)
+
+               accumulatedDrag(iEdge) = &
+                  accumulatedDrag(iEdge) &
+                      /(nBtrSubcycles*config_btr_subcycle_loop_factor)
             end do
             !$omp end do
             !$omp end parallel
@@ -2845,7 +2907,8 @@ module ocn_time_integration_split
 
       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
                              scratchPool, err, 2, baroclinicThickness,&
-                             normalBarotropicVelocityNew,normalBaroclinicVelocityNew)
+                             normalBarotropicVelocityNew,normalBaroclinicVelocityNew,&
+                             accumulatedDragOverDepth,accumulatedDrag)
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of

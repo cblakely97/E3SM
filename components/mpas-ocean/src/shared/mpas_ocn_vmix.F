@@ -539,10 +539,10 @@ contains
               B(k)=1.0_RKIND - A(k) - C(k)
               ! set D(k)
               if (k.EQ.N) then
-                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedD(iEdge)&
-                    -accumulatedW(iEdge)*dt/layerThickEdgeMean(k,iEdge)
+                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedDragOverDepth(iEdge)&
+                    -accumulatedDrag(iEdge)*dt/layerThickEdgeMean(k,iEdge)
               else
-                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedD(iEdge)
+                 D(k)=normalBaroclinicVelocity(k,iEdge)+normalBarotropicVelocity(iEdge)+dt*accumulatedDragoverDepth(iEdge)
               endif
 
            end do
@@ -1536,8 +1536,8 @@ contains
       integer, intent(in), optional :: timeLevelIn
       real(kind=RKIND), dimension(:),optional :: baroclinicThickness,normalBarotropicVelocity
       real(kind=RKIND), dimension(:,:),optional :: normalBaroclinicVelocity
-      real(kind=RKIND), dimension(:,:),optional :: accumulatedDragOverDepth
-      real(kind=RKIND), dimension(:,:),optional :: accumulatedDrag
+      real(kind=RKIND), dimension(:),optional :: accumulatedDragOverDepth
+      real(kind=RKIND), dimension(:),optional :: accumulatedDrag
 
       type (mpas_pool_type), pointer :: tracersPool, tracersSurfaceFluxPool
 
@@ -1717,10 +1717,10 @@ contains
 
       case (dragTypeVariable)
 
-        call ocn_vel_vmix_tend_implicit_linear(dt, normalBaroclinicVelocity,&
-          normalBarotropicVelocity, baroclinicThickness, &
-          vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
-          landIceEdgeFraction, normalVelocity, err)
+        !call ocn_vel_vmix_tend_implicit_linear(dt, normalBaroclinicVelocity,&
+        !  normalBarotropicVelocity, baroclinicThickness, &
+        !  vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
+        !  landIceEdgeFraction, normalVelocity, err)
 
       case (dragTypeMannings)
 
