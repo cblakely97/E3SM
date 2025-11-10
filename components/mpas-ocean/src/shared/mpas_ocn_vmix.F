@@ -35,8 +35,6 @@ module ocn_vmix
    use ocn_vmix_coefs_redi
    use ocn_diagnostics_variables
    use ocn_surface_land_ice_fluxes
-   use ocn_spatial_mode_splitting, only : &
-      ocn_spatial_mode_splitting_return_vertical_limits
 
    implicit none
    private
@@ -495,8 +493,11 @@ contains
       !$omp do schedule(runtime) private(Nsurf, N, cell1, cell2, A, bTemp, C, m, rTemp, k)
 #endif
       do iEdge = 1, nEdgesOwned
+        cell1=cellsOnEdge(1,iEdge)
+        cell2=cellsOnEdge(2,iEdge)
+        N=maxLevelEdgeTop(iEdge)
 
-        call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,N)
+        !call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,N)
 
         Nsurf = minLevelEdgeBot(iEdge)
         if (N .gt. 0) then

@@ -984,9 +984,6 @@ module ocn_time_integration_split
            call ocn_surface_bulk_forcing_vel(forcingPool,surfaceStress_btr,&
                                        surfaceStressMag_btr,err)
 
-           write(6,*) "maxval(surfaceStress_btr)=",maxval(surfaceStress_btr)
-           write(6,*) "minval(surfaceStress_btr)=",minval(surfaceStress_btr)
-
            call ocn_compute_tidal_potential_forcing(err)
 
          endif
@@ -1222,9 +1219,6 @@ module ocn_time_integration_split
                   else
                      nEdges = nEdgesHalo(edgeHaloComputeCounter-1)
                   endif
-                  write(6,*) "nEdges = ",nEdges
-                  write(6,*) " nEdgesOwned = ",nEdgesOwned
-                  write (6,*) "nEdgesHalo = ",nEdgesHalo
 
                   accumulatedDragOverDepth(:)=0.0_RKIND
                   accumulatedDrag(:)=0.0_RKIND
