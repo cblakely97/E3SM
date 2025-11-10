@@ -97,12 +97,12 @@ module ocn_time_integration_split
       numTSIterations, &! number of outer timestep iterations
       nBtrSubcycles     ! number of barotropic subcycles
 
-   integer :: ssh_sal_on
    integer :: &
       thickEdgeFluxChoice ! choice of thickness flux type
    integer, parameter :: &
       thickEdgeFluxCenter   = 1, &! use mean thickness of cell neighbors
       thickEdgeFluxUpwind   = 2   ! use upwind cell thickness at edge
+   integer :: ssh_sal_on
 
    real (kind=RKIND) :: &
       useVelocityCorrection,&! mask for velocity correction
@@ -297,11 +297,10 @@ module ocn_time_integration_split
       real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc, bottomDepth_btr
       real (kind=RKIND), dimension(:,:), pointer :: edgeMask_btr, edgeMask_bc
       integer :: kmax
-      real (kind=RKIND) :: windForcingTendency_tmp, C_drag_quadratic
+      real (kind=RKIND) :: tempWindForcingTendency
+      real (kind=RKIND) :: C_drag_quadratic=0.0025_RKIND
       real (kind=RKIND), dimension(:), pointer :: surfaceStress_bc,&
-                                                  surfaceStress_btr,&
-                                                  surfaceStressMag_bc,&
-                                                  surfaceStressMag_btr
+         surfaceStress_btr, surfaceStressMag_bc, surfaceStressMag_btr
 
       ! for now make accumulation variables private arrays
       real (kind=RKIND) :: tempDragOverDepth, tempDrag, bottomDragDepth
@@ -355,8 +354,8 @@ module ocn_time_integration_split
 
       if ( config_spatial_mode_splitting) then
 
-        edgeMask_btr => edgeMask_spatial_split_btr
-        edgeMask_bc => edgeMask_spatial_split_bc
+        !edgeMask_btr => edgeMask_spatial_mode_splitting_btr
+        !edgeMask_bc => edgeMask_spatial_mode_splitting_bc
 
         ! "next" domain is barotropic domain
         domain_btr => domain % next
@@ -376,10 +375,10 @@ module ocn_time_integration_split
                                                  statePool)
       call mpas_pool_get_subpool(block%structs, 'forcing', &
                                                  forcingPool)
-      call mpas_pool_get_subpool(block%structs, 'tend', &
-                                                 tendPool)
       call mpas_pool_get_subpool(block%structs, 'shortwave', &
                                                  swForcingPool)
+      call mpas_pool_get_subpool(block%structs, 'tend', &
+                                                 tendPool)
       call mpas_pool_get_subpool(block%structs, 'scratch', &
                                                  scratchPool)
       call mpas_pool_get_subpool(statePool, 'tracers', &
@@ -444,6 +443,7 @@ module ocn_time_integration_split
       call mpas_pool_get_array(tracersPool, 'activeTracers', activeTracersNew, 2)
 
       allocate(baroclinicThickness(nEdgesAll+1))
+
       allocate(accumulatedDragOverDepth(nEdgesAll+1), accumulatedDrag(nEdgesAll+1))
       accumulatedDragOverDepth(:)=0.0_RKIND
       accumulatedDrag(:)=0.0_RKIND
@@ -457,7 +457,7 @@ module ocn_time_integration_split
 
       ! CPB 20250710: If we are using spatial mode splitting then get surface stress on baroclinic
       ! domain
-      if (config_spatial_mode_splitting) then
+!      if (config_spatial_mode_splitting) then
          call mpas_pool_get_array(forcingPool,'surfaceStress',&
                                   surfaceStress_bc)
          call mpas_pool_get_array(forcingPool,'surfaceStressMagnitude',&
@@ -466,10 +466,9 @@ module ocn_time_integration_split
          surfaceStressMag_bc(:)=0d0
          call ocn_surface_bulk_forcing_vel(forcingPool,surfaceStress_bc,&
                                  surfaceStressMag_bc,err)
-         write(6,*) "baroclinic domain:"
-         write(6,*) "maxval(surfaceStress_bc)=",maxval(surfaceStress_bc)
-         write(6,*) "minval(surfaceStress_bc)=",minval(surfaceStress_bc)
-       endif
+         surfaceStress_btr => surfaceStress_bc
+         surfaceStressMag_btr => surfaceStressMag_bc
+!       endif
 
 #ifdef MPAS_OPENACC
       !$acc enter data copyin(normalVelocityCur, normalBarotropicVelocityCur, &
@@ -819,19 +818,15 @@ module ocn_time_integration_split
             !$omp do schedule(runtime) &
             !$omp private(cell1, cell2, k)
             do iEdge = 1, nEdgesHalo(config_num_halos+1)
-               cell1 = cellsOnEdge(1,iEdge)
-               cell2 = cellsOnEdge(2,iEdge)
-               kmax=maxLevelEdgeTop(iEdge)
-               if (cell2.EQ.nCellsAll+1) then
-                  cell2=cell1
-                  kmax=maxLevelCell(cell1)
-               endif
+
+               call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
+
                baroclinicThickness(iEdge) = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
                do k = minLevelEdgeBot(iEdge)+1, kmax
                   baroclinicThickness(iEdge) = baroclinicThickness(iEdge) + &
                                  layerThickEdgeFlux(k,iEdge)
                enddo
-            enddo ! iEdgeh
+            enddo ! iEdge
             !$omp end do
             !$omp end parallel
 
@@ -840,26 +835,25 @@ module ocn_time_integration_split
             !$omp private(k, cell1, cell2, uTemp, sshGrad, &
             !$omp         normalThicknessFluxSum, thicknessSum)
             do iEdge = 1, nEdgesOwned
-               cell1 = cellsOnEdge(1,iEdge)
-               cell2 = cellsOnEdge(2,iEdge)
-               kmax=maxLevelEdgeTop(iEdge)
-               if (cell2.EQ.nCellsAll+1) then
-                  cell2=cell1
-                  kmax=maxLevelCell(cell1)
-               endif
 
-               if (config_spatial_mode_splitting) then
-                  windForcingTendency_tmp=surfaceStress_bc(iEdge)/&
-                     (baroclinicThickness(iEdge)*rho_sw)
-               else
-                  windForcingTendency_tmp=0d0
-               endif
+               call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
 
                ! could put this after with uTemp(maxleveledgetop+1:nvertlevels)=0
                uTemp(:,iEdge) = 0.0_RKIND
                sshGrad = splitFact * gravity * &
                          (sshNew(cell2) - sshNew(cell1)) &
                          /dcEdge(iEdge)
+
+               if (config_spatial_mode_splitting) then
+                  tempWindForcingTendency=surfaceStress_bc(iEdge)/&
+                     (baroclinicThickness(iEdge)*rho_sw)
+               else
+                  ! temporarily calculate the wind forcing and such for non spatial mode splitting
+                  ! to see if I can get this to run in non spatial split mode
+                  tempWindForcingTendency=surfaceStress_bc(iEdge)/&
+                     (baroclinicThickness(iEdge)*rho_sw)
+               endif
+
                do k = minLevelEdgeBot(iEdge), kmax
 
                   ! normalBaroclinicVelocityNew =
@@ -871,9 +865,9 @@ module ocn_time_integration_split
                   uTemp(k,iEdge) = normalBaroclinicVelocityCur(k,iEdge) &
                            + dt * (normalVelocityTend(k,iEdge) &
                            + normalVelocityNew(k,iEdge) &
-                           + sshGrad - windForcingTendency_tmp )
+                           + sshGrad - tempWindForcingTendency )
 
-                  uTemp(k,iEdge)=uTemp(k,iEdge)*edgeMask_bc(k,iEdge)
+                  !uTemp(k,iEdge)=uTemp(k,iEdge)*edgeMask_bc(k,iEdge)
                enddo ! vertical
 
                ! thicknessSum is initialized outside the loop because
@@ -904,7 +898,7 @@ module ocn_time_integration_split
                   normalBaroclinicVelocityCur(k,iEdge) + uTemp(k,iEdge) - &
                          dt * barotropicForcing(iEdge))
 
-                  normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
+                  !normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
 
                enddo
 
@@ -928,7 +922,6 @@ module ocn_time_integration_split
          call mpas_timer_stop('se halo barotropicForcing')
 
          call mpas_timer_stop("se bcl vel")
-
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
          ! END baroclinic iterations on linear Coriolis term
@@ -964,22 +957,22 @@ module ocn_time_integration_split
                                                         sshNew,&
                                                         normalBarotropicVelocityCur,&
                                                         normalBarotropicVelocityNew,&
-                                                        sshTend)
+                                                        sshTend,&
+                                                        normalBaroclinicVelocityCur)
 
            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
            deallocate(baroclinicThickness)
            allocate(baroclinicThickness(nEdgesAll+1))
            baroclinicThickness(:)=0d0
            do iEdge=1,nEdgesAll
-              cell1 = cellsOnEdge(1,iEdge)
-              cell2 = cellsOnEdge(2,iEdge)
-              if (cell2.EQ.nCellsAll+1) then
-                 cell2=cell1
-              endif
+
+              call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
 
               ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
               baroclinicThickness(iEdge)=MIN(bottomDepth_btr(cell1),bottomDepth_btr(cell2))
            enddo
+
+           baroclinicThickness(:)=baroclinicThickness_bc(:)
 
            ! get surfaceStress on barotropic domain
            call mpas_pool_get_array(forcingPool,'surfaceStress',&
@@ -1080,8 +1073,7 @@ module ocn_time_integration_split
             !$omp do schedule(runtime)
             do iCell = 1, nCellsAll
                ! sshSubcycleOld = sshOld
-               !sshSubcycleCur(iCell) = sshNew(iCell)
-               sshSubcycleCur(iCell)=sshCur(iCell)
+               sshSubcycleCur(iCell) = sshCur(iCell)
             end do
             !$omp end do
 
@@ -1230,6 +1222,9 @@ module ocn_time_integration_split
                   else
                      nEdges = nEdgesHalo(edgeHaloComputeCounter-1)
                   endif
+                  write(6,*) "nEdges = ",nEdges
+                  write(6,*) " nEdgesOwned = ",nEdgesOwned
+                  write (6,*) "nEdgesHalo = ",nEdgesHalo
 
                   accumulatedDragOverDepth(:)=0.0_RKIND
                   accumulatedDrag(:)=0.0_RKIND
@@ -1239,6 +1234,10 @@ module ocn_time_integration_split
                   !$omp private(i, cell1, cell2, eoe, CoriolisTerm, &
                   !$omp         temp_mask)
                   do iEdge = 1, nEdges
+
+                     if (maxLevelEdgeTop(iEdge).EQ.0) then
+                        cycle
+                     endif
 
                      temp_mask = edgeMask(1, iEdge)
 
@@ -1256,12 +1255,12 @@ module ocn_time_integration_split
                      end do
 
                      if (config_spatial_mode_splitting) then
-                        C_drag_quadratic=0.0025_RKIND
 
-                        bottomDragDepth=baroclinicThickness(iEdge)+&
-                           0.5_RKIND*(sshSubcycleCur(cell1)+sshSubcycleCur(cell2))
+                        bottomDragDepth=baroclinicThickness(iEdge) &
+                           - 0.5_RKIND*(sshCur(cell1)+sshCur(cell2)) & 
+                           + 0.5_RKIND*(sshSubcycleCur(cell1)+sshSubcycleCur(cell2))
 
-                        windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
+                        tempWindForcingTendency=surfaceStress_btr(iEdge)/&
                            (bottomDragDepth*rho_sw)
 
                         tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
@@ -1276,7 +1275,24 @@ module ocn_time_integration_split
                            (normalBarotropicVelocitySubcycleCur(iEdge)+&
                            normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
                      else
-                        windForcingTendency_tmp=0d0
+                        bottomDragDepth=baroclinicThickness(iEdge) &
+                           - 0.5_RKIND*(sshCur(cell1)+sshCur(cell2)) & 
+                           + 0.5_RKIND*(sshSubcycleCur(cell1)+sshSubcycleCur(cell2))
+
+                        tempWindForcingTendency=surfaceStress_btr(iEdge)/&
+                           (bottomDragDepth*rho_sw)
+
+                        tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
+
+                        tempDrag=C_drag_quadratic*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
                      endif
 
                      normalBarotropicVelocitySubcycleNew(iEdge) = &
@@ -1285,8 +1301,8 @@ module ocn_time_integration_split
                             + dt/nBtrSubcycles*(CoriolisTerm - gravity &
                              *(sshSubcycleCur(cell2) - &
                                sshSubcycleCur(cell1))/dcEdge(iEdge) + &
-                               barotropicForcing(iEdge) - &
-                               tempDragOverDepth + windForcingTendency_tmp))
+                               barotropicForcing(iEdge) &
+                               - tempDragOverDepth + tempWindForcingTendency))
 
                      accumulatedDragOverDepth(iEdge)=accumulatedDragOverDepth(iEdge)+tempDragOverDepth
                      accumulatedDrag(iEdge)=accumulatedDrag(iEdge)+tempDrag
@@ -1374,8 +1390,10 @@ module ocn_time_integration_split
                ! depth across each edge and we simply add the sea surface height of the current
                ! subcycle.
                if (config_spatial_mode_splitting) then
-                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshSubcycleCur, &
-                            baroclinicThickness, wctEdge,.TRUE.)
+!                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshSubcycleCur, &
+!                            baroclinicThickness, wctEdge,.TRUE.)
+                  call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+                            baroclinicThickness, wctEdge)
                else
                   call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
                             baroclinicThickness, wctEdge)
@@ -1566,6 +1584,10 @@ module ocn_time_integration_split
                   !$omp private(i, cell1, cell2, eoe, coriolisTerm, &
                   !$omp         sshCell1, sshCell2, temp_mask)
                   do iEdge = 1, nEdges
+                     
+                     if (maxLevelEdgeTop(iEdge).EQ.0) then
+                        cycle
+                     endif
 
                      temp_mask = edgeMask(1,iEdge)
 
@@ -1593,12 +1615,31 @@ module ocn_time_integration_split
                                          sshSubcycleNew(cell2)
 
                      if (config_spatial_mode_splitting) then
-                        C_drag_quadratic=0.0025_RKIND
 
-                        bottomDragDepth=baroclinicThickness(iEdge)+&
-                           0.5_RKIND*(sshCell1+sshCell2)
+                        bottomDragDepth=baroclinicThickness(iEdge)&
+                           -0.5_RKIND*(sshCur(cell1)+sshCur(cell2))&
+                           +0.5_RKIND*(sshCell1+sshCell2)
 
-                        windForcingTendency_tmp=surfaceStress_btr(iEdge)/&
+                        tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
+
+                        tempDrag=C_drag_quadratic*&
+                           ((normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
+                           (normalBarotropicVelocitySubcycleCur(iEdge)+&
+                           normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
+
+                        tempWindForcingTendency=surfaceStress_btr(iEdge)/&
+                           (bottomDragDepth*rho_sw)
+                     else
+                        bottomDragDepth=baroclinicThickness(iEdge)&
+                           -0.5_RKIND*(sshCur(cell1)+sshCur(cell2))&
+                           +0.5_RKIND*(sshCell1+sshCell2)
+
+                        tempWindForcingTendency=surfaceStress_btr(iEdge)/&
                            (bottomDragDepth*rho_sw)
 
                         tempDragOverDepth=(C_drag_quadratic/bottomDragDepth)*&
@@ -1612,8 +1653,6 @@ module ocn_time_integration_split
                            normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))**2)**0.5_RKIND*&
                            (normalBarotropicVelocitySubcycleCur(iEdge)+&
                            normalBaroclinicVelocityCur(maxLevelEdgeTop(iEdge),iEdge))
-                     else
-                        windForcingTendency_tmp=0d0
                      endif
                      ! normalBarotropicVelocityNew =
                      ! normalBarotropicVelocityOld + dt/J*
@@ -1627,7 +1666,7 @@ module ocn_time_integration_split
                              (sshCell2 - sshCell1)/dcEdge(iEdge) &
                            + barotropicForcing(iEdge) - &
                              tempDragOverDepth + &
-                             windForcingTendency_tmp))
+                             tempWindForcingTendency))
 
                      accumulatedDragOverDepth(iEdge)=accumulatedDragOverDepth(iEdge)+tempDragOverDepth
                      accumulatedDrag(iEdge)=accumulatedDrag(iEdge)+tempDrag
@@ -1713,7 +1752,9 @@ module ocn_time_integration_split
                   !$omp end parallel
 
                   if (config_spatial_mode_splitting) then
-                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshTemp, &
+                     !call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshTemp, &
+                     !          baroclinicThickness, wctEdge)
+                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
                                baroclinicThickness, wctEdge)
                   else
                      call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
@@ -1762,6 +1803,9 @@ module ocn_time_integration_split
                   if (config_spatial_mode_splitting) then
 !                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, sshTemp, &
 !                               baroclinicThickness, wctEdge)
+                     ! note that we don't actually want to solve this one here
+                     call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
+                               baroclinicThickness, wctEdge)
                   else
                      call ocn_diagnostic_solve_wctEdge(btrvel_temp, deltaSSH, &
                                baroclinicThickness, wctEdge)
@@ -1772,7 +1816,7 @@ module ocn_time_integration_split
                   !$omp do schedule(runtime) &
                   !$omp private(flux)
                   do iEdge = 1, nEdges
-                     if (maxLevelEdgeTop(iEdge).eq.0) cycle
+                     !if (maxLevelEdgeTop(iEdge).eq.0) cycle
 
                      flux = btrvel_temp(iEdge) * wctEdge(iEdge)
 
@@ -1922,15 +1966,8 @@ module ocn_time_integration_split
                                                            sshNew,&
                                                            normalBarotropicVelocityCur,&
                                                            normalBarotropicVelocityNew,&
-                                                           sshTend)
-
-!              open(unit=314,file='edgeMask.csv',action='write')
-!              do iEdge=1,nEdgesAll
-!                 write(314,'(F25.16, ",", F25.16, ",", F25.16,",",F25.16)') lonEdge(iEdge),&
-!                    latEdge(iEdge),edgeMask(1,iEdge),edgeMask_bc(1,iEdge)
-!              enddo
-!              
-!              call mpas_log_write('should fail here',MPAS_LOG_CRIT) 
+                                                           sshTend,&
+                                                           normalBaroclinicVelocityCur)
 
 
               ! reassign baroclinicThickness
@@ -1943,7 +1980,7 @@ module ocn_time_integration_split
               do iEdge = 1,nEdgesAll
                 ! CPB Note: zero out baroclinic on edge
                 do k=1,nVertLevels
-                   normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
+                   !normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
                 enddo
 
                 normalBarotropicVelocityNew(iEdge)=0.0_RKIND
@@ -2012,13 +2049,7 @@ module ocn_time_integration_split
             !$omp         thicknessSum, normalVelocityCorrection)
             do iEdge = 1, nEdges
 
-               cell1 = cellsOnEdge(1,iEdge)
-               cell2 = cellsOnEdge(2,iEdge)
-               kmax=maxLevelEdgeTop(iEdge)
-               if (cell2.EQ.nCellsAll+1) then
-                  cell2=cell1
-                  kmax=maxLevelCell(cell1)
-               endif
+               call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
 
                if (thickEdgeFluxChoice == thickEdgeFluxUpwind) then
                   do k=1,nVertLevels
@@ -2043,7 +2074,7 @@ module ocn_time_integration_split
                ! on land boundaries maxLevelEdgeTop=0, but I want to
                ! initialize thicknessSum with a nonzero value to avoid
                ! a NaN.
-               if (config_spatial_mode_splitting) then
+               if (config_spatial_mode_splitting ) then
 
                   ! group correction and baroclinic velocities together
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &
@@ -2170,6 +2201,7 @@ module ocn_time_integration_split
 
          ! update halo for thickness tendencies
          call mpas_timer_start("se halo thickness")
+
          call mpas_dmpar_field_halo_exch(domain, 'tendLayerThickness')
 
          call mpas_timer_stop("se halo thickness")
@@ -2723,12 +2755,9 @@ module ocn_time_integration_split
             !$omp do schedule(runtime) private(k)
 #endif
             do iEdge = 1, nEdgesAll
-               cell1=cellsOnEdge(1,iEdge)
-               cell2=cellsOnEdge(2,iEdge)
-               kmax=maxLevelEdgeTop(iEdge)
-               if (cell2.EQ.nCellsAll+1) then
-                  kmax=maxLevelCell(cell1)
-               endif
+
+               call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
+
 #ifdef MPAS_OPENACC
             !$acc loop vector
 #endif
@@ -2909,6 +2938,8 @@ module ocn_time_integration_split
                              scratchPool, err, 2, baroclinicThickness,&
                              normalBarotropicVelocityNew,normalBaroclinicVelocityNew,&
                              accumulatedDragOverDepth,accumulatedDrag)
+
+      deallocate( accumulatedDragOverDepth, accumulatedDrag )
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of
@@ -3390,13 +3421,8 @@ module ocn_time_integration_split
             endif
 
             do iEdge = 1, nEdges
-               kmax  = maxLevelEdgeTop(iEdge)
-               cell1 = cellsOnEdge(1,iEdge)
-               cell2 = cellsOnEdge(2,iEdge)
-               if (cell2.EQ.nCellsAll+1) then
-                  cell2=cell1
-                  kmax=maxLevelCell(cell1)
-               endif
+
+               call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)
 
                ! normalBarotropicVelocity = sum(h*u)/sum(h) on each edge
                ! ocn_diagnostic_solve has not yet been called, so
@@ -3421,7 +3447,7 @@ module ocn_time_integration_split
                   normalThicknessFluxSum = normalThicknessFluxSum + &
                                            layerThicknessEdge1* &
                                            normalVelocity(k,iEdge)
-                                        layerThicknessSum = layerThicknessSum + &
+                  layerThicknessSum = layerThicknessSum + &
                                       layerThicknessEdge1
 
                enddo
@@ -3476,8 +3502,6 @@ module ocn_time_integration_split
       self_attraction_and_loading_beta = config_self_attraction_and_loading_beta
 
    end subroutine ocn_time_integration_split_init!}}}
-
-!***********************************************************************
 
 end module ocn_time_integration_split
 

@@ -318,6 +318,7 @@ module ocn_forward_mode
 
       ! fill the ocean mesh structure
       call ocn_meshCreate(domain_ptr)
+      write(6,*) "domainID = ",domain_ptr % domainID
 
       !-----------------------------------------------------------------
       ! Initialize submodules and fields that are required by others

@@ -85,7 +85,8 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_bottomDepth_remapping,&
               ocn_spatial_mode_splitting_dmpar_init_bc,&
               ocn_spatial_mode_splitting_dmpar_init_btr,&
-              ocn_spatial_mode_splitting_set_edgeMask_btr
+              ocn_spatial_mode_splitting_set_edgeMask_btr,&
+              ocn_spatial_mode_splitting_return_vertical_limits
 
     !--------------------------------------------------------------------
     !
@@ -1211,6 +1212,9 @@ contains
                                                 barotropicForcingMeridional_bc,&
                                                 barotropicForcingMeridional_btr
 
+    real (kind=RKIND), dimension(:,:), pointer :: normalBaroclinicVelocity_bc,&
+                                                  normalBaroclinicVelocity_btr
+
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
@@ -1252,6 +1256,7 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
@@ -1260,6 +1265,11 @@ contains
         ! get barotropicForcing from 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicForcing')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
+
+        ! get statePool variables
+        call mpas_dmpar_field_halo_exch(domain, 'normalBaroclinicVelocity')
+        call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+           normalBaroclinicVelocity_bc, 1)
 
         block_ptr => block_ptr % next
     end do
@@ -1274,6 +1284,7 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
@@ -1309,6 +1320,13 @@ contains
                                   sValues_bc2btr)
         
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcing')
+
+        ! get statePool variables
+        call mpas_dmpar_field_halo_exch(domain_btr, 'normalBaroclinicVelocity')
+        call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+           normalBaroclinicVelocity_btr, 1)
+
+        normalBaroclinicVelocity_btr(:,:)=normalBaroclinicVelocity_bc(:,:)
         
         block_ptr => block_ptr % next
     end do
@@ -1656,7 +1674,8 @@ contains
                                                        sshNew,&
                                                        normalBarotropicVelocityCur,&
                                                        normalBarotropicVelocityNew,&
-                                                       sshTend) !{{{
+                                                       sshTend,&
+                                                       normalBaroclinicVelocityCur) !{{{
 
     !-----------------------------------------------------------------
     ! IMPORTANT NOTE:
@@ -1692,6 +1711,9 @@ contains
                                                       sshNew,&
                                                       normalBarotropicVelocityCur,&
                                                       normalBarotropicVelocityNew
+
+    real (kind=RKIND), pointer, intent(inout), dimension(:,:) :: &
+                                                      normalBaroclinicVelocityCur
                                                        
     ! tendPool
     real (kind=RKIND), pointer, intent(inout), dimension(:) :: sshTend
@@ -1754,11 +1776,14 @@ contains
 
     call mpas_pool_get_array(statePool, 'ssh', sshNew, 2)
 
-    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
-                             normalBarotropicVelocityCur, 1)
+    !call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+    !                         normalBarotropicVelocityCur, 1)
 
-    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
-                             normalBarotropicVelocityNew, 2)
+    !call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+    !                         normalBarotropicVelocityNew, 2)
+
+    !call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+    !                         normalBaroclinicVelocityCur, 1)
 
     call mpas_pool_get_array(tendPool, 'ssh', sshTend)
 
@@ -1777,7 +1802,7 @@ contains
        do iEdge=1,nEdgesAll
           !maxLevelEdgeTop(iEdge)=maxLevelEdgeTop_spatial_split(iEdge)
           do k=1,nVertLevels
-             edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+!             edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
           enddo
        enddo
     endif
@@ -1841,6 +1866,9 @@ contains
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
+    write(6,*) ""
+    write(6,*) "shouldn't be in here friend"
+    write(6,*) ""
 
     block_ptr => domain % blocklist
     do while(associated(block_ptr))
@@ -2435,7 +2463,7 @@ contains
     ! populate edgeMask with edgeMask_spatial_split_bc
     do iEdge=1,nEdgesAll
        do k=1,nVertLevels
-          edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+         ! edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
        enddo
     enddo
 
@@ -2444,6 +2472,43 @@ contains
     end subroutine ocn_spatial_mode_splitting_set_edgeMask_btr !}}}
 
 !***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_return_vertical_limits
+!
+!> \brief   Returns kmax for spatial mode splitting
+!> \author  Coleman Blakely
+!> \date    November 2025
+!> \details
+!>  In case of spatial mode splitting returns appropriate index for 
+!>  vertical loops
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,kmax)!{{{
+
+      !-----------------------------------------------------------------
+      ! input/output variables
+      !-----------------------------------------------------------------
+
+      integer, intent(in) :: iEdge
+      integer, intent(inout) :: cell1
+      integer, intent(inout) :: cell2
+      integer, intent(inout) :: kmax
+
+      cell1=cellsOnEdge(1,iEdge)
+      cell2=cellsOnEdge(2,iEdge)
+      kmax=maxLevelEdgeTop(iEdge)
+
+      if ( .NOT. config_spatial_mode_splitting ) then
+         return
+      endif
+
+      if (cell2.EQ.nCellsAll+1) then
+         !cell2=cell1
+         !kmax=maxLevelCell(cell1)
+      endif
+
+   end subroutine ocn_spatial_mode_splitting_return_vertical_limits!}}}
 
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
