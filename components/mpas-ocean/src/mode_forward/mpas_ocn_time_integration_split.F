@@ -972,6 +972,7 @@ module ocn_time_integration_split
               baroclinicThickness(iEdge)=MIN(bottomDepth_btr(cell1),bottomDepth_btr(cell2))
            enddo
 
+           ! TEMP: reassign baroclinic baroclinic thicknesses for "carry-over"
            baroclinicThickness(:)=baroclinicThickness_bc(:)
 
            ! get surfaceStress on barotropic domain
@@ -1884,6 +1885,7 @@ module ocn_time_integration_split
                normalBarotropicVelocityNew(iEdge) &
                      / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
 
+               ! dirac delta function
                normalBarotropicVelocityNew(iEdge) = &
                   normalBarotropicVelocitySubcycleNew(iEdge)
 
@@ -1939,7 +1941,7 @@ module ocn_time_integration_split
               ! layer thicknesses we will calculate on the baroclinic domain.
               if (splitExplicitStep < numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshNew(iCell)=0.5d0*(sshCur(iCell)+sshSubcycleNew(iCell))
+                    sshNew(iCell)=0.5_RKIND*(sshCur(iCell)+sshSubcycleNew(iCell))
                  end do
               else
                  do iCell = 1,nCellsAll
@@ -1963,7 +1965,6 @@ module ocn_time_integration_split
                                                            sshTend,&
                                                            normalBaroclinicVelocityCur)
 
-
               ! reassign baroclinicThickness
               deallocate(baroclinicThickness)
               allocate(baroclinicThickness(nEdgesAll+1))
@@ -1977,7 +1978,8 @@ module ocn_time_integration_split
                    !normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
                 enddo
 
-                normalBarotropicVelocityNew(iEdge)=0.0_RKIND
+                !normalBarotropicVelocityNew(iEdge)=0.0_RKIND
+                !normalBarotropicVelocityNew(iEdge)=normalBarotropicVelocityCur(iEdge)
               enddo
 
             endif
@@ -2068,7 +2070,7 @@ module ocn_time_integration_split
                ! on land boundaries maxLevelEdgeTop=0, but I want to
                ! initialize thicknessSum with a nonzero value to avoid
                ! a NaN.
-               if (config_spatial_mode_splitting ) then
+               if (config_spatial_mode_splitting .AND. .FALSE.) then
 
                   ! group correction and baroclinic velocities together
                   normalThicknessFluxSum = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)* &

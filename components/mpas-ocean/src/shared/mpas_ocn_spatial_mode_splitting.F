@@ -182,6 +182,9 @@ module ocn_spatial_mode_splitting
                                          nEdgesPerProc_bc,&
                                          nEdgesPerProc_btr
 
+   ! for debugging (temporary)
+   logical :: carryOverVals=.TRUE.
+
 !***********************************************************************
 
 contains
@@ -1206,14 +1209,15 @@ contains
 
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
-                                                barotropicForcing_btr,&
-                                                barotropicForcingZonal_bc,&
-                                                barotropicForcingZonal_btr,&
-                                                barotropicForcingMeridional_bc,&
-                                                barotropicForcingMeridional_btr
+                                                barotropicForcing_btr
 
     real (kind=RKIND), dimension(:,:), pointer :: normalBaroclinicVelocity_bc,&
                                                   normalBaroclinicVelocity_btr
+
+    real (kind=RKIND), dimension(:), allocatable :: normalBaroclinicVelocityBottom_bc,&
+                                               normalBaroclinicVelocityBottom_btr
+
+    integer, dimension(:), pointer :: maxLevelEdgeTop_bc, maxLevelEdgeTop_btr
 
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
@@ -1262,7 +1266,10 @@ contains
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
-        ! get barotropicForcing from 
+        ! get maxLevelEdgeTop
+        call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', maxLevelEdgeTop_bc)
+
+        ! get barotropicForcing
         call mpas_dmpar_field_halo_exch(domain, 'barotropicForcing')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
 
@@ -1270,6 +1277,18 @@ contains
         call mpas_dmpar_field_halo_exch(domain, 'normalBaroclinicVelocity')
         call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
            normalBaroclinicVelocity_bc, 1)
+
+        ! get baroclinic velocities only on bottom active layer
+        allocate( normalBaroclinicVelocityBottom_bc(nEdgesSolve_bc) )
+        normalBaroclinicVelocityBottom_bc(:) = 0.0_RKIND
+        
+        do iEdge = 1,nEdgesSolve_bc
+           if (maxLevelEdgeTop(iEdge).EQ.0) then
+              cycle
+           endif
+           normalBaroclinicVelocityBottom_bc(iEdge) = &
+               normalBaroclinicVelocity_bc(maxLevelEdgeTop(iEdge),iEdge)
+        end do
 
         block_ptr => block_ptr % next
     end do
@@ -1289,14 +1308,9 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
 
-        ! get connectivity/etc.
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_btr)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_btr)
-        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_btr)
-        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_btr)
-        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_btr)
+        ! get maxLevelEdgeTop
+        call mpas_pool_get_array(meshPool, 'maxLevelEdgeTop', maxLevelEdgeTop_btr)
 
         ! get barotropicForcing from pools
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_btr)
@@ -1318,6 +1332,8 @@ contains
                                   colValues_bc2btr,&
                                   rowValues_bc2btr,&
                                   sValues_bc2btr)
+
+        write(6,*) "successfully remapped barotropicForcing"
         
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcing')
 
@@ -1326,7 +1342,38 @@ contains
         call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
            normalBaroclinicVelocity_btr, 1)
 
-        normalBaroclinicVelocity_btr(:,:)=normalBaroclinicVelocity_bc(:,:)
+        ! get baroclinic velocities only on bottom active layer
+        allocate( normalBaroclinicVelocityBottom_btr(nEdgesSolve_btr) )
+        normalBaroclinicVelocityBottom_btr(:) = 0.0_RKIND
+
+        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                  nEdgesSolve_bc,&
+                                  nEdgesGlobal_bc,&
+                                  nEdgesPerProc_bc,&
+                                  nEdgesDisplacement_bc,&
+                                  indexToEdgeIDGathered_bc,&
+                                  normalBaroclinicVelocityBottom_bc,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_btr,&
+                                  nEdgesPerProc_btr,&
+                                  nEdgesDisplacement_btr,&
+                                  indexToEdgeIDGathered_btr,&
+                                  normalBaroclinicVelocityBottom_btr,&
+                                  colValues_bc2btr,&
+                                  rowValues_bc2btr,&
+                                  sValues_bc2btr)
+
+        write(6,*) "successfully remapped normalBaroclinicVelocity"
+
+        normalBaroclinicVelocity_btr(:,:) = 0.0_RKIND
+        
+        do iEdge = 1,nEdgesSolve_btr
+           if (maxLevelEdgeTop(iEdge).EQ.0) then
+              cycle
+           endif
+           normalBaroclinicVelocity_btr(maxLevelEdgeTop(iEdge),iEdge) = &
+              normalBaroclinicVelocityBottom_btr(iEdge)
+        end do
         
         block_ptr => block_ptr % next
     end do
@@ -1369,6 +1416,7 @@ contains
     type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
+    type (mpas_pool_type), pointer :: statePool
 
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
@@ -1382,10 +1430,8 @@ contains
     ! arrays for storing data
     real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
                                                 barotropicThicknessFlux_btr,&
-                                                barotropicThicknessFluxZonal_bc,&
-                                                barotropicThicknessFluxZonal_btr,&
-                                                barotropicThicknessFluxMeridional_bc,&
-                                                barotropicThicknessFluxMeridional_btr
+                                                normalBarotropicVelocity_bc,&
+                                                normalBarotropicVelocity_btr
 
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
@@ -1428,15 +1474,21 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
 
-        ! get barotropicThicknessFlux from 
+        ! get barotropicThicknessFlux
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicThicknessFlux')
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
+
+        ! get normalBarotropicVelocity
+        call mpas_dmpar_field_halo_exch(domain_btr, 'normalBarotropicVelocity')
+        call mpas_pool_get_array(statePool,'normalBarotropicVelocity',&
+           normalBarotropicVelocity_btr,1)
 
         block_ptr => block_ptr % next
     end do
@@ -1451,6 +1503,7 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
@@ -1465,7 +1518,7 @@ contains
         call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_bc)
         call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_bc)
 
-        ! get barotropicThicknessFlux from 
+        ! get barotropicThicknessFlux
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_bc)
         call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
@@ -1485,53 +1538,35 @@ contains
                                   rowValues_btr2bc,&
                                   sValues_btr2bc)
 
-!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-!                                 barotropicThicknessFluxZonal_bc)
-!        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-!                                 barotropicThicknessFluxMeridional_bc)
-!
-!        ! get remapped data from iMOAB
-!        totalNumVals=2*nCellsSolve_bc
-!        entity_type=1
-!        ierr = iMOAB_GetDoubleTagStorage(bcPID,&
-!                                         btr2bcFields,&
-!                                         totalNumVals,&
-!                                         entity_type,&
-!                                         btr2bcVar)
-!        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
-!
-!        ! unpack buffers
-!        do iCell = 1,nCellsSolve_bc
-!            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-!            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-!        end do
-!
-!        ! exchange halos
-!        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
-!        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
-!
-!        ! put into edge-based arrays
-!        barotropicThicknessFlux_bc(:)=0d0
-!        do iEdge = 1,nEdgesSolve_bc
-!           cell1 = cellsOnEdge_bc(1, iEdge)
-!           cell2 = cellsOnEdge_bc(2,iEdge)
-!           if (cell2.eq.nCellsAll_bc+1) then
-!              cell2=cell1
-!           endif
-!           zonal_edge = 0.5d0 * (barotropicThicknessFluxZonal_bc(cell1) + &
-!                                 barotropicThicknessFluxZonal_bc(cell2))
-!           meridional_edge = 0.5d0 * (barotropicThicknessFluxMeridional_bc(cell1) + &
-!                                      barotropicThicknessFluxMeridional_bc(cell2))
-!           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-!                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-!                                            sin(angleEdge_bc(iEdge))*meridional_edge
-!           cell2 = cellsOnEdge_bc(2,iEdge)
-!           if (cell2.eq.nCellsAll_bc+1) then
-!              cell2=cell1
-!           endif
-!        end do
+        write(6,*) "successfully remapped barotropicThicknessFlux"
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
+
+        ! get normalBarotropicVelocity
+        call mpas_pool_get_array(statePool, 'normalBarotropicVelocity',&
+                                 normalBarotropicVelocity_bc,1)
+
+        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_btr,&
+                                  nEdgesPerProc_btr,&
+                                  nEdgesDisplacement_btr,&
+                                  indexToEdgeIDGathered_btr,&
+                                  normalBarotropicVelocity_btr,&
+                                  nEdgesSolve_btr,&
+                                  nEdgesGlobal_bc,&
+                                  nEdgesPerProc_bc,&
+                                  nEdgesDisplacement_bc,&
+                                  indexToEdgeIDGathered_bc,&
+                                  normalBarotropicVelocity_bc,&
+                                  colValues_btr2bc,&
+                                  rowValues_btr2bc,&
+                                  sValues_btr2bc)
+
+        write(6,*) "successfully remapped normalBarotropicVelocity"
+
+        call mpas_dmpar_field_halo_exch(domain, 'normalBarotropicVelocity',&
+           timeLevel=2)
 
         block_ptr => block_ptr % next
     end do
@@ -1776,14 +1811,14 @@ contains
 
     call mpas_pool_get_array(statePool, 'ssh', sshNew, 2)
 
-    !call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
-    !                         normalBarotropicVelocityCur, 1)
+    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+                             normalBarotropicVelocityCur, 1)
 
-    !call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
-    !                         normalBarotropicVelocityNew, 2)
+    call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+                             normalBarotropicVelocityNew, 2)
 
-    !call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
-    !                         normalBaroclinicVelocityCur, 1)
+    call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+                             normalBaroclinicVelocityCur, 1)
 
     call mpas_pool_get_array(tendPool, 'ssh', sshTend)
 
@@ -1866,9 +1901,6 @@ contains
     ! End preamble
     !-----------------------------------------------------------------
     ! Begin code
-    write(6,*) ""
-    write(6,*) "shouldn't be in here friend"
-    write(6,*) ""
 
     block_ptr => domain % blocklist
     do while(associated(block_ptr))
@@ -2173,8 +2205,12 @@ contains
        enddo
 
        ! interpolate
-       call interpolate(colValues, rowValues, sValues,&
-                        globalArray_source, globalArray_target)
+       if (carryOverVals) then
+          globalArray_target(:)=globalArray_source(:)
+       else
+         call interpolate(colValues, rowValues, sValues,&
+                           globalArray_source, globalArray_target)
+       endif
 
        ! put back in order to scatter
        do iEdge = 1,nEdgesGlobal_target
@@ -2504,8 +2540,8 @@ contains
       endif
 
       if (cell2.EQ.nCellsAll+1) then
-         !cell2=cell1
-         !kmax=maxLevelCell(cell1)
+        ! cell2=cell1
+        ! kmax=maxLevelCell(cell1)
       endif
 
    end subroutine ocn_spatial_mode_splitting_return_vertical_limits!}}}
