@@ -1274,7 +1274,7 @@ contains
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
 
         ! get statePool variables
-        call mpas_dmpar_field_halo_exch(domain, 'normalBaroclinicVelocity')
+        call mpas_dmpar_field_halo_exch(domain, 'normalBaroclinicVelocity',timeLevel=1)
         call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
            normalBaroclinicVelocity_bc, 1)
 
@@ -1333,12 +1333,11 @@ contains
                                   rowValues_bc2btr,&
                                   sValues_bc2btr)
 
-        write(6,*) "successfully remapped barotropicForcing"
+        !write(6,*) "successfully remapped barotropicForcing"
         
         call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcing')
 
         ! get statePool variables
-        call mpas_dmpar_field_halo_exch(domain_btr, 'normalBaroclinicVelocity')
         call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
            normalBaroclinicVelocity_btr, 1)
 
@@ -1363,7 +1362,7 @@ contains
                                   rowValues_bc2btr,&
                                   sValues_bc2btr)
 
-        write(6,*) "successfully remapped normalBaroclinicVelocity"
+        !write(6,*) "successfully remapped normalBaroclinicVelocity"
 
         normalBaroclinicVelocity_btr(:,:) = 0.0_RKIND
         
@@ -1374,6 +1373,8 @@ contains
            normalBaroclinicVelocity_btr(maxLevelEdgeTop(iEdge),iEdge) = &
               normalBaroclinicVelocityBottom_btr(iEdge)
         end do
+
+        call mpas_dmpar_field_halo_exch(domain_btr, 'normalBaroclinicVelocity',timeLevel=1)
         
         block_ptr => block_ptr % next
     end do
@@ -1485,11 +1486,6 @@ contains
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
 
-        ! get normalBarotropicVelocity
-        call mpas_dmpar_field_halo_exch(domain_btr, 'normalBarotropicVelocity')
-        call mpas_pool_get_array(statePool,'normalBarotropicVelocity',&
-           normalBarotropicVelocity_btr,1)
-
         block_ptr => block_ptr % next
     end do
 
@@ -1538,35 +1534,9 @@ contains
                                   rowValues_btr2bc,&
                                   sValues_btr2bc)
 
-        write(6,*) "successfully remapped barotropicThicknessFlux"
+        !write(6,*) "successfully remapped barotropicThicknessFlux"
 
         call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFlux')
-
-        ! get normalBarotropicVelocity
-        call mpas_pool_get_array(statePool, 'normalBarotropicVelocity',&
-                                 normalBarotropicVelocity_bc,1)
-
-        call ocn_spatial_mode_splitting_dmpar_interpolate(domain,&
-                                  nEdgesSolve_btr,&
-                                  nEdgesGlobal_btr,&
-                                  nEdgesPerProc_btr,&
-                                  nEdgesDisplacement_btr,&
-                                  indexToEdgeIDGathered_btr,&
-                                  normalBarotropicVelocity_btr,&
-                                  nEdgesSolve_btr,&
-                                  nEdgesGlobal_bc,&
-                                  nEdgesPerProc_bc,&
-                                  nEdgesDisplacement_bc,&
-                                  indexToEdgeIDGathered_bc,&
-                                  normalBarotropicVelocity_bc,&
-                                  colValues_btr2bc,&
-                                  rowValues_btr2bc,&
-                                  sValues_btr2bc)
-
-        write(6,*) "successfully remapped normalBarotropicVelocity"
-
-        call mpas_dmpar_field_halo_exch(domain, 'normalBarotropicVelocity',&
-           timeLevel=2)
 
         block_ptr => block_ptr % next
     end do
