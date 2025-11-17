@@ -945,11 +945,6 @@ module ocn_time_integration_split
               baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
            enddo
 
-            write(6,*) "baroclinicThickness:",minval(baroclinicThickness),&
-               ' - ',maxval(baroclinicThickness)
-            write(6,*) "normalBaroclinicVelocityCur:",minval(normalBaroclinicVelocityCur),&
-               ' - ',maxval(normalBaroclinicVelocityCur)
-
            ! remap barotropicForcing
            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
@@ -992,10 +987,6 @@ module ocn_time_integration_split
                                        surfaceStressMag_btr,err)
 
            call ocn_compute_tidal_potential_forcing(err)
-            write(6,*) "baroclinicThickness:",minval(baroclinicThickness),&
-               ' - ',maxval(baroclinicThickness)
-            write(6,*) "normalBaroclinicVelocityCur:",minval(normalBaroclinicVelocityCur),&
-               ' - ',maxval(normalBaroclinicVelocityCur)
 
          endif
 
@@ -1766,11 +1757,6 @@ module ocn_time_integration_split
                                baroclinicThickness, wctEdge)
                   endif
 
-                  write(6,*) "btrvel_Temp:",minval(btrvel_Temp),&
-                     ' - ',maxval(btrvel_Temp)
-                  write(6,*) "wctEdge:",minval(wctEdge),&
-                     ' - ',maxval(wctEdge)
-
                   !$omp parallel
                   !$omp do schedule(runtime) &
                   !$omp private(i, iEdge, flux)
@@ -1963,10 +1949,6 @@ module ocn_time_integration_split
                     sshNew(iCell)=sshSubcycleNew(iCell)
                  end do
               endif
-            write(6,*) "baroclinicThickness:",minval(baroclinicThickness),&
-               ' - ',maxval(baroclinicThickness)
-            write(6,*) "normalBaroclinicVelocityCur:",minval(normalBaroclinicVelocityCur),&
-               ' - ',maxval(normalBaroclinicVelocityCur)
 
               ! remap barotropicThicknessFlux
               call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
@@ -2000,11 +1982,6 @@ module ocn_time_integration_split
                 normalBarotropicVelocityNew(iEdge)=0.0_RKIND
                 !normalBarotropicVelocityNew(iEdge)=normalBarotropicVelocityCur(iEdge)
               enddo
-            write(6,*) "baroclinicThickness:",minval(baroclinicThickness),&
-               ' - ',maxval(baroclinicThickness)
-            write(6,*) "normalBaroclinicVelocityCur:",minval(normalBaroclinicVelocityCur),&
-               ' - ',maxval(normalBaroclinicVelocityCur)
-            write(6,*) ""
 
             endif
 
