@@ -805,6 +805,7 @@ contains
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
+        call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
         call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
 
         ! get connectivity/etc.

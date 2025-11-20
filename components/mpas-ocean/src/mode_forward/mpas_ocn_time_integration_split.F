@@ -1694,6 +1694,13 @@ module ocn_time_integration_split
                normalBarotropicVelocityNew(iEdge) = &
                normalBarotropicVelocityNew(iEdge) &
                      / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
+
+               if ( config_spatial_mode_splitting ) then
+                  ! use dirac-delta filter
+                  normalBarotropicVelocityNew(iEdge) = &
+                     normalBarotropicVelocitySubcycleNew(iEdge)
+               endif
+
             end do
             !$omp end do
             !$omp end parallel
@@ -1739,7 +1746,7 @@ module ocn_time_integration_split
               ! layer thicknesses we will calculate on the baroclinic domain.
               if (splitExplicitStep < numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshNew(iCell)=0.5d0*(sshCur(iCell)+sshSubcycleNew(iCell))
+                    sshNew(iCell)=0.5_RKIND*(sshCur(iCell)+sshSubcycleNew(iCell))
                  end do
               else
                  do iCell = 1,nCellsAll
