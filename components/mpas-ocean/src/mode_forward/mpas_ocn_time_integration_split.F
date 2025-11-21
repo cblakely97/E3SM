@@ -50,6 +50,7 @@ module ocn_time_integration_split
    use ocn_transport_tests
 
    use ocn_spatial_mode_splitting
+   use ocn_surface_bulk_forcing, only : ocn_surface_bulk_forcing_vel
 
    implicit none
    private
@@ -290,6 +291,16 @@ module ocn_time_integration_split
       ! variables for spatial mode splitting
       type (domain_type), pointer :: domain_btr, domain_ptr         ! barotropic domain pointer
 
+      ! 
+
+      ! variables for additional barotropic terms (wind forcing, bottom drag, etc.)
+      real (kind=RKIND) :: tempWindForcingTendency
+      real (kind=RKIND), dimension(:), pointer :: surfaceStress_bc,&
+         surfaceStress_btr, surfaceStressMagnitude_bc, surfaceStressMagnitude_btr
+      real (kind=RKIND) :: barotropicThickness
+      real (kind=RKIND) :: tempDragOverDepth, tempDrag
+      real (kind=RKIND), dimension(:), pointer :: accumulatedDragOverDepth, accumulatedDrag
+
       ! These are public variables used from the diagnostics module
       ! indexSurfaceVelocityZonal, indexSurfaceVelocityMeridional
       ! indexSSHGradientZonal, indexSSHGradientMeridional
@@ -436,6 +447,30 @@ module ocn_time_integration_split
          !$acc enter data create(lowFreqDivergenceNew)
       endif
 #endif
+
+      ! prep additional barotropic terms if necessary
+      if ( config_additional_barotropic_terms ) then
+         call mpas_pool_get_array(forcingPool, 'surfaceStress', &
+            surfaceStress_bc)
+         call mpas_pool_get_array(forcingPool, 'surfaceStressMagnitude', &
+            surfaceStressMagnitude_bc)
+
+         surfaceStress_bc(:) = 0.0_RKIND
+         surfaceStressMagnitude_bc = 0.0_RKIND
+         call ocn_surface_bulk_forcing_vel(forcingPool, surfaceStress_bc, &
+            surfaceStressMagnitude_bc, err)
+
+         ! Unless we are using spatial split mode the surface stresses for
+         ! barotropic subcycles and baroclinic time steps are the same
+         surfaceStress_btr => surfaceStress_bc
+         surfaceStressMagnitude_btr => surfaceStressMagnitude_bc
+
+         ! set pointers for accumulated drag terms
+         !call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', &
+         !   accumulatedDragOverDepth)
+         !call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', &
+         !   accumulatedDrag)
+      endif
 
       ! Initialize * variables that are used to compute baroclinic
       ! tendencies below.
@@ -765,6 +800,23 @@ module ocn_time_integration_split
 
             allocate(uTemp(nVertLevels,nEdgesOwned))
 
+            baroclinicThickness(:) = 0.0_RKIND
+            !$omp parallel
+            !$omp do schedule(runtime) &
+            !$omp private(cell1, cell2, k)
+            do iEdge = 1, nEdgesHalo(config_num_halos+1)
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+               baroclinicThickness(iEdge) = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
+               do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
+                  baroclinicThickness(iEdge) = baroclinicThickness(iEdge) + &
+                                 layerThickEdgeFlux(k,iEdge)
+               enddo
+            enddo ! iEdgeh
+            !$omp end do
+            !$omp end parallel
+
+
             !$omp parallel
             !$omp do schedule(runtime) &
             !$omp private(k, cell1, cell2, uTemp, sshGrad, &
@@ -777,6 +829,16 @@ module ocn_time_integration_split
                sshGrad = splitFact * gravity * &
                          (sshNew(cell2) - sshNew(cell1)) &
                          /dcEdge(iEdge)
+
+               ! if we are using the additional barotropic terms calculate the wind
+               ! tendency here
+               if ( config_additional_barotropic_terms ) then
+                  tempWindForcingTendency = surfaceStress_bc(iEdge)/ &
+                     (baroclinicThickness(iEdge)*rho_sw)
+               else
+                  tempWindForcingTendency = 0.0_RKIND
+               endif
+
                do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
 
                   ! normalBaroclinicVelocityNew =
@@ -788,7 +850,7 @@ module ocn_time_integration_split
                   uTemp(k,iEdge) = normalBaroclinicVelocityCur(k,iEdge) &
                            + dt * (normalVelocityTend(k,iEdge) &
                            + normalVelocityNew(k,iEdge) &
-                           + sshGrad )
+                           + sshGrad - tempWindForcingTendency )
                enddo ! vertical
 
                ! thicknessSum is initialized outside the loop because
@@ -825,22 +887,6 @@ module ocn_time_integration_split
             !$omp end do
             !$omp end parallel
 
-            baroclinicThickness(:) = 0.0_RKIND
-            !$omp parallel
-            !$omp do schedule(runtime) &
-            !$omp private(cell1, cell2, k)
-            do iEdge = 1, nEdgesHalo(config_num_halos+1)
-               cell1 = cellsOnEdge(1,iEdge)
-               cell2 = cellsOnEdge(2,iEdge)
-               baroclinicThickness(iEdge) = layerThickEdgeFlux(minLevelEdgeBot(iEdge),iEdge)
-               do k = minLevelEdgeBot(iEdge)+1, maxLevelEdgeTop(iEdge)
-                  baroclinicThickness(iEdge) = baroclinicThickness(iEdge) + &
-                                 layerThickEdgeFlux(k,iEdge)
-               enddo
-            enddo ! iEdgeh
-            !$omp end do
-            !$omp end parallel
-
             deallocate(uTemp)
 
             call mpas_timer_start("se halo normalBaroclinicVelocity")
@@ -868,44 +914,60 @@ module ocn_time_integration_split
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
          if (config_spatial_mode_splitting) then
-           ! TODO: move this inside one subroutine
+            ! TODO: move this inside one subroutine
 
-           ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
-           ! spatial-split barotropic subcycling
-           allocate(baroclinicThickness_bc(nEdgesAll+1))
+            ! store baroclinicThickness (from baroclinic domain) in baroclinicThickness_bc during
+            ! spatial-split barotropic subcycling
+            allocate(baroclinicThickness_bc(nEdgesAll+1))
 
-           baroclinicThickness_bc(:)=0d0
-           do iEdge=1,nEdgesAll
-              baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
-           enddo
+            baroclinicThickness_bc(:)=0d0
+            do iEdge=1,nEdgesAll
+               baroclinicThickness_bc(iEdge)=baroclinicThickness(iEdge)
+            enddo
 
-           ! remap barotropicForcing
-           call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+            ! remap barotropicForcing
+            call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
 
-           ! point nCells, nEdges, etc. to appropriate values on barotropic
-           ! domain for subcycling
-           call ocn_spatial_mode_splitting_setup_domain(domain_btr,&
-                                                        statePool,&
-                                                        forcingPool,&
-                                                        tendPool,&
-                                                        sshCur,&
-                                                        sshNew,&
-                                                        normalBarotropicVelocityCur,&
-                                                        normalBarotropicVelocityNew,&
-                                                        sshTend)
+            ! point nCells, nEdges, etc. to appropriate values on barotropic
+            ! domain for subcycling
+            call ocn_spatial_mode_splitting_setup_domain(domain_btr,&
+                                                         statePool,&
+                                                         forcingPool,&
+                                                         tendPool,&
+                                                         sshCur,&
+                                                         sshNew,&
+                                                         normalBarotropicVelocityCur,&
+                                                         normalBarotropicVelocityNew,&
+                                                         sshTend)
 
-           ! put bathymetric depths into baroclinicThickness for barotropic subcycling
-           deallocate(baroclinicThickness)
-           allocate(baroclinicThickness(nEdgesAll+1))
-           baroclinicThickness(:)=0d0
-           do iEdge=1,nEdgesAll
-              if (maxLevelEdgeTop(iEdge) == 0) cycle
-              cell1 = cellsOnEdge(1,iEdge)
-              cell2 = cellsOnEdge(2,iEdge)
+            ! put bathymetric depths into baroclinicThickness for barotropic subcycling
+            deallocate(baroclinicThickness)
+            allocate(baroclinicThickness(nEdgesAll+1))
+            baroclinicThickness(:)=0d0
+            do iEdge=1,nEdgesAll
+               !if (maxLevelEdgeTop(iEdge) == 0) cycle
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+               if (cell2.EQ.nCellsAll+1) then
+                  cell2=cell1
+               endif
+ 
+               ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
+               baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
+            enddo
 
-              ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
-              baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
-           enddo
+            ! if we are using additional barotropic terms calculate those here
+            if ( config_additional_barotropic_terms ) then
+               call mpas_pool_get_array(forcingPool, 'surfaceStress', &
+                  surfaceStress_btr)
+               call mpas_pool_get_array(forcingPool, 'surfaceStressMagnitude', &
+                  surfaceStressMagnitude_btr)
+
+               surfaceStress_btr(:) = 0.0_RKIND
+               surfaceStressMagnitude_btr = 0.0_RKIND
+               call ocn_surface_bulk_forcing_vel(forcingPool, surfaceStress_btr, &
+                  surfaceStressMagnitude_btr, err)
+            endif
 
          endif
 
@@ -1163,13 +1225,32 @@ module ocn_time_integration_split
                                        fEdge(eoe)
                      end do
 
+                     ! If using additional barotropic terms, calculate them
+                     if ( config_additional_barotropic_terms ) then
+                        ! TODO: figure out how I can reorder things so that I can calculate
+                        ! wctEdge somewhere around here to make this more readable
+                        if (config_spatial_mode_splitting) then
+                           barotropicThickness = baroclinicThickness(iEdge) + \
+                           0.5_RKIND*(sshSubcycleCur(cell1) + sshSubcycleCur(cell2))
+                        else
+                           barotropicThickness = baroclinicThickness(iEdge) - \
+                           0.5_RKIND*(sshCur(cell1) + sshCur(cell2)) + \
+                           0.5_RKIND*(sshSubcycleCur(cell1) + sshSubcycleCur(cell2))
+                        endif
+
+                        tempWindForcingTendency = surfaceStress_btr(iEdge)/ &
+                           (barotropicThickness*rho_sw)
+                     else
+                        tempWindForcingTendency = 0.0_RKIND
+                     endif
+
                      normalBarotropicVelocitySubcycleNew(iEdge) = &
                            temp_mask* &
                            (normalBarotropicVelocitySubcycleCur(iEdge) &
                             + dt/nBtrSubcycles*(CoriolisTerm - gravity &
                              *(sshSubcycleCur(cell2) - &
                                sshSubcycleCur(cell1))/dcEdge(iEdge) + &
-                               barotropicForcing(iEdge)))
+                               barotropicForcing(iEdge) + tempWindForcingTendency))
 
                   end do ! edges
                   !$omp end do
@@ -1469,6 +1550,25 @@ module ocn_time_integration_split
                               +      config_btr_gam2_SSHWt1  * &
                                          sshSubcycleNew(cell2)
 
+                     ! If using additional barotropic terms, calculate them
+                     if ( config_additional_barotropic_terms ) then
+                        ! TODO: figure out how I can reorder things so that I can calculate
+                        ! wctEdge somewhere around here to make this more readable
+                        if (config_spatial_mode_splitting) then
+                           barotropicThickness = baroclinicThickness(iEdge) + \
+                           0.5_RKIND*(sshCell1 + sshCell2)
+                        else
+                           barotropicThickness = baroclinicThickness(iEdge) - \
+                           0.5_RKIND*(sshCur(cell1) + sshCur(cell2)) + \
+                           0.5_RKIND*(sshCell1 + sshCell2)
+                        endif
+
+                        tempWindForcingTendency = surfaceStress_btr(iEdge)/ &
+                           (barotropicThickness*rho_sw)
+                     else
+                        tempWindForcingTendency = 0.0_RKIND
+                     endif
+
                      ! normalBarotropicVelocityNew =
                      ! normalBarotropicVelocityOld + dt/J*
                      !     (-f*normalBarotropicVelocityoldPerp
@@ -1479,7 +1579,7 @@ module ocn_time_integration_split
                            + dt/nBtrSubcycles &
                            *(CoriolisTerm - gravity* &
                              (sshCell2 - sshCell1)/dcEdge(iEdge) &
-                           + barotropicForcing(iEdge)))
+                           + barotropicForcing(iEdge) + tempWindForcingTendency))
 
                   end do
                   !$omp end do
@@ -1694,13 +1794,6 @@ module ocn_time_integration_split
                normalBarotropicVelocityNew(iEdge) = &
                normalBarotropicVelocityNew(iEdge) &
                      / (nBtrSubcycles*config_btr_subcycle_loop_factor + 1)
-
-               if ( config_spatial_mode_splitting ) then
-                  ! use dirac-delta filter
-                  normalBarotropicVelocityNew(iEdge) = &
-                     normalBarotropicVelocitySubcycleNew(iEdge)
-               endif
-
             end do
             !$omp end do
             !$omp end parallel
@@ -1746,7 +1839,7 @@ module ocn_time_integration_split
               ! layer thicknesses we will calculate on the baroclinic domain.
               if (splitExplicitStep < numTSIterations) then
                  do iCell = 1,nCellsAll
-                    sshNew(iCell)=0.5_RKIND*(sshCur(iCell)+sshSubcycleNew(iCell))
+                    sshNew(iCell)=0.5d0*(sshCur(iCell)+sshSubcycleNew(iCell))
                  end do
               else
                  do iCell = 1,nCellsAll
@@ -1777,13 +1870,13 @@ module ocn_time_integration_split
               ! reassign baroclinicThickness
               deallocate(baroclinicThickness)
               allocate(baroclinicThickness(nEdgesAll+1))
-              baroclinicThickness(:)=baroclinicThickness_bc(:)
-              deallocate(baroclinicThickness_bc)
 
               ! set normalBarotropicVelocityNew to 0 since we calculate it later
               do iEdge = 1,nEdgesAll
-                normalBarotropicVelocityNew(iEdge)=0d0
+                normalBarotropicVelocityNew(iEdge)=0.0_RKIND
+                baroclinicThickness(iEdge) = baroclinicThickness_bc(iEdge)
               enddo
+              deallocate(baroclinicThickness_bc)
 
             endif
 

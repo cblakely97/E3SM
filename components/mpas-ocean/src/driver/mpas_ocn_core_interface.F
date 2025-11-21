@@ -142,6 +142,7 @@ module ocn_core_interface
       logical, pointer :: verticalRemapPKGActive
       logical, pointer :: activeWavePKGActive
       logical, pointer :: spatialModeSplitPKGActive
+      logical, pointer :: additionalBarotropicTermsPKGActive
 
       type (mpas_pool_iterator_type) :: pkgItr
       logical, pointer :: packageActive
@@ -177,6 +178,7 @@ module ocn_core_interface
       logical, pointer :: config_use_gotm
       logical, pointer :: config_use_active_wave
       logical, pointer :: config_spatial_mode_splitting
+      logical, pointer :: config_additional_barotropic_terms
 
       character (len=StrKIND), pointer :: config_time_integrator
       character (len=StrKIND), pointer :: config_ocean_run_mode
@@ -442,6 +444,18 @@ module ocn_core_interface
                                config_spatial_mode_splitting)
       if (config_spatial_mode_splitting) then
          spatialModeSplitPKGActive = .true.
+      endif
+
+      !
+      ! test for additional barotropic terms
+      !
+      call mpas_pool_get_package(packagePool, 'additionalBarotropicTermsPKGActive', &
+                              additionalBarotropicTermsPKGActive)
+      call mpas_pool_get_config(configPool, &
+                              'config_additional_barotropic_terms',&
+                               config_additional_barotropic_terms)
+      if (config_additional_barotropic_terms) then
+         additionalBarotropicTermsPKGActive = .true.
       endif
 
       !
