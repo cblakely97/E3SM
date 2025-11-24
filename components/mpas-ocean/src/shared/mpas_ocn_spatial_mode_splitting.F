@@ -636,17 +636,17 @@ contains
     type (mpas_pool_type), pointer :: meshPool
     type (mpas_pool_type), pointer :: diagnosticsPool
     type (mpas_pool_type), pointer :: statePool
+
     ! mesh information
     integer, pointer :: nCellsSolve_bc, nCellsSolve_btr,&
                         nEdgesSolve_bc, nEdgesSolve_btr,&
                         vertexDegree_btr, nEdgesAll_btr
     ! arrays for storing data
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
-                                                barotropicForcing_btr,&
-                                                barotropicForcingZonal_bc,&
-                                                barotropicForcingZonal_btr,&
-                                                barotropicForcingMeridional_bc,&
-                                                barotropicForcingMeridional_btr
+    real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc, &
+       barotropicForcing_btr
+    real (kind=RKIND), dimension(:,:), pointer :: normalBaroclinicVelocityCur_bc, &
+       normalBaroclinicVelocityCur_btr
+
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
     real (kind=RKIND) :: zonal_edge, meridional_edge
@@ -656,7 +656,7 @@ contains
                                         cellsOnVertex_btr
     real (kind=RKIND), dimension(:,:), pointer :: kiteAreasOnVertex_btr
     ! looping variables
-    integer :: iCell, iEdge
+    integer :: iCell, iEdge, k
     ! error handling
     integer :: ierr
 
@@ -687,107 +687,20 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
         call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
         call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
 
-        ! get barotropicForcing from 
+        ! get variables on baroclinic domain
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingZonal',&
-                                 barotropicForcingZonal_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
-                                 barotropicForcingMeridional_bc)
 
-        ! exchange halos for barotropicForcing
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain,'barotropicForcing')
-
-        ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicForcing_bc, &
-                              barotropicForcingX_bc, &
-                              barotropicForcingY_bc, &
-                              barotropicForcingZ_bc, &
-                              barotropicForcingZonal_bc, &
-                              barotropicForcingMeridional_bc)
-
-        ! exchange halos for barotropicForcing
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingMeridional')
-         call mpas_dmpar_field_halo_exch(domain,'barotropicForcingZonal')
-
-        ! pack buffers for iMOAB
-        do iCell = 1,nCellsSolve_bc
-            bc2btrVar(iCell) = barotropicForcingZonal_bc(iCell)
-            bc2btrVar(iCell+nCellsSolve_bc) = barotropicForcingMeridional_bc(iCell)
-        enddo
-
-        ! assign data to baroclinic mesh on compute processor 
-        if (bcComm .ne. MPI_COMM_NULL) then
-
-           ! assign values to moab
-           ierr=iMOAB_SetDoubleTagStorage(cmpbcPID,&
-                                          bc2btrFields,&
-                                          2*nCellsSolve_bc,&
-                                          1,&
-                                          bc2btrVar)
-           call errorout(ierr,"failed to assign bc2btr data to baroclinic mesh")
-
-           ! send element tag
-           ierr = iMOAB_SendElementTag(cmpbcPID,&
-                                       bc2btrFields,&
-                                       bcCouComm,&
-                                       cplbtr)
-           call errorout(ierr,"failed to send bc2btr data tag")
+        if ( config_additional_barotropic_terms ) then
+           call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+              normalBaroclinicVelocityCur_bc, 1)
         endif
 
-        ! receive data on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           
-           ! receive data
-           ierr = iMOAB_ReceiveElementTag(cplbcPID,&
-                                          bc2btrFields,&
-                                          bcCouComm,&
-                                          cplbtr)
-           call errorout(ierr,"failed to receive bc2btr data tag")
-        endif
-
-        ! free send buffers
-        if (bcComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cmpbcPID, cplbtr)
-           call errorout(ierr,"failed to free send buffers 698")
-        endif
-
-        ! do remapping on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ApplyScalarProjectionWeights(bc2btrPID,&
-                                                     0,&
-                                                     bc2btr_weights_identifier,&
-                                                     bc2btrFields,&
-                                                     bc2btrFields_btr)
-           call errorout(ierr,"failed to reproject bc2btr data to barotropic mesh")
-
-           ! send data to cmpbtr
-           ierr = iMOAB_SendElementTag(cplbtrPID, &
-                                       bc2btrFields_btr, &
-                                       btrCouComm, cmpbtr)
-           call errorout(ierr,"failed to send bc2btr_btr tags")
-        endif
-
-        ! receive data from coupler on barotropic
-        if (btrComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ReceiveElementTag(cmpbtrPID, &
-                                          bc2btrFields_btr, &
-                                          btrCouComm, &
-                                          cplbtr)
-           call errorout(ierr,"failed to receive bc2btr_btr tags")
-        endif
-
-        ! free send buffers
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cplbtrPID, cmpbtr)
-           call errorout(ierr,"failed to free send buffers 728")
-        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -801,68 +714,31 @@ contains
         ! setup pools
         call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
         call mpas_pool_get_subpool(block_ptr % structs, 'diagnostics', diagnosticsPool)
+        call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
 
         ! get num cells/edges
-        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
-        call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_btr)
         call mpas_pool_get_dimension(meshPool, 'nEdges', nEdgesAll_btr)
-        call mpas_pool_get_dimension(meshPool, 'vertexDegree', vertexDegree_btr)
 
-        ! get connectivity/etc.
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_btr)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_btr)
-        call mpas_pool_get_array(meshPool, 'verticesOnEdge', verticesOnEdge_btr)
-        call mpas_pool_get_array(meshPool, 'cellsOnVertex', cellsOnVertex_btr)
-        call mpas_pool_get_array(meshPool, 'kiteAreasOnVertex', kiteAreasOnVertex_btr)
-
-        ! get barotropicForcing from pools
+        ! get variables on barotropic domain
         call mpas_pool_get_array(diagnosticsPool, 'barotropicForcing', barotropicForcing_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingZonal',&
-                                 barotropicForcingZonal_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicForcingMeridional',&
-                                 barotropicForcingMeridional_btr)
 
-        ! get remapped data from iMOAB
-        ierr = iMOAB_GetDoubleTagStorage(cmpbtrPID,&
-                                         bc2btrFields_btr,&
-                                         2*nCellsSolve_btr,&
-                                         1,&
-                                         bc2btrVar_btr)
-        call errorout(ierr,"failed to get bc2btrVar_btr")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_btr
-           barotropicForcingZonal_btr(iCell) = bc2btrVar_btr(iCell)
-           barotropicForcingMeridional_btr(iCell) = bc2btrVar_btr(iCell+nCellsSolve_btr)
-        enddo
-
-        ! perform halo exchange
-        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingZonal')
-        call mpas_dmpar_field_halo_exch(domain_btr, 'barotropicForcingMeridional')
-
-        ! reconstruct cell based zonal and meridional components to edge-based zonal and meridional
-        ! components
-        call mpas_vector_cell_to_edge_isotropic(barotropicForcingZonal_btr,&
-                                                barotropicForcingMeridional_btr,&
-                                                nEdgesSolve_btr,&
-                                                vertexDegree_btr,&
-                                                verticesOnEdge_btr,&
-                                                cellsOnVertex_btr,&
-                                                kiteAreasOnVertex_btr,&
-                                                barotropicForcingOnEdgeZonal_btr,&
-                                                barotropicForcingOnEdgeMeridional_btr)
-
-        ! put back into edge based arrays
-         barotropicForcing_btr(:) = 0_RKIND
-         do iEdge = 1,nEdgesSolve_btr
-            barotropicForcing_btr(iEdge) = barotropicForcing_btr(iEdge) + &
-                          cos(angleEdge_btr(iEdge))*barotropicForcingOnEdgeZonal_btr(iEdge) + &
-                          sin(angleEdge_btr(iEdge))*barotropicForcingOnEdgeMeridional_btr(iEdge)
-         enddo
+        if ( config_additional_barotropic_terms ) then
+           call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+              normalBaroclinicVelocityCur_btr, 1)
+        endif
 
          do iEdge = 1,nEdgesAll_btr
             barotropicForcing_btr(iEdge)=barotropicForcing_bc(iEdge)
          enddo
+
+         if ( config_additional_barotropic_terms) then 
+            do iEdge = 1,nEdgesAll_btr
+               do k = 1,nVertLevels
+                  normalBaroclinicVelocityCur_btr(k,iEdge) = &
+                     normalBaroclinicVelocityCur_bc(k,iEdge)
+               enddo
+            enddo
+         endif
 
         block_ptr => block_ptr % next
     enddo
@@ -912,12 +788,9 @@ contains
                         nEdgesAll_bc, nEdgesAll_btr
 
     ! arrays for storing data
-    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc,&
-                                                barotropicThicknessFlux_btr,&
-                                                barotropicThicknessFluxZonal_bc,&
-                                                barotropicThicknessFluxZonal_btr,&
-                                                barotropicThicknessFluxMeridional_bc,&
-                                                barotropicThicknessFluxMeridional_btr
+    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_bc, &
+       barotropicThicknessFlux_btr, accumulatedDragOverDepth_bc, &
+       accumulatedDragOverDepth_btr, accumulatedDrag_bc, accumulatedDrag_btr
 
     ! for going from cell centered to edge based quantities
     integer :: cell1, cell2
@@ -965,93 +838,19 @@ contains
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_btr)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_btr)
+        call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
 
-        ! exchange halos for barotropicThicknessFlux
-        ! TODO: test if this is actually necessary
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFlux')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
+        if ( config_additional_barotropic_terms ) then
+           call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth',&
+                                    accumulatedDragOverDepth_btr)
+           call mpas_dmpar_field_halo_exch(domain_btr,'accumulatedDragOverDepth')
 
-        ! reconstruct from edge based to cell-centered quantities
-        call mpas_reconstruct(meshPool, barotropicThicknessFlux_btr,&
-                              barotropicThicknessFluxX_btr,&
-                              barotropicThicknessFluxY_btr,&
-                              barotropicThicknessFluxZ_btr,&
-                              barotropicThicknessFluxZonal_btr,&
-                              barotropicThicknessFluxMeridional_btr)
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxZonal')
-         call mpas_dmpar_field_halo_exch(domain_btr,'barotropicThicknessFluxMeridional')
+           call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag',&
+                                    accumulatedDrag_btr)
+           call mpas_dmpar_field_halo_exch(domain_btr,'accumulatedDrag')
 
-        ! pack buffers
-        do iCell = 1,nCellsSolve_btr
-            btr2bcVar_btr(iCell) = barotropicThicknessFluxZonal_btr(iCell)
-            btr2bcVar_btr(iCell+nCellsSolve_btr) = barotropicThicknessFluxMeridional_btr(iCell)
-        enddo
-
-        ! assign data to barotropic mesh on compute processor
-        if (btrComm .ne. MPI_COMM_NULL) then
-
-           ! assign values to moab
-           ierr = iMOAB_SetDoubleTagStorage(cmpbtrPID,&
-                                            btr2bcFields_btr,&
-                                            2*nCellsSolve_btr,&
-                                            1,&
-                                            btr2bcVar_btr)
-           call errorout(ierr,"failed to assign btr2bcFields_btr to barotropic mesh")
-
-           ! send element tag
-           ierr = iMOAB_SendElementTag(cmpbtrPID,&
-                                       btr2bcFields_btr,&
-                                       btrCouComm,&
-                                       cplbc)
-           call errorout(ierr,"failed to send btr2bcFields_btr to coupler")
         endif
 
-        ! receive data on coupler
-        if (cplComm .ne. MPI_COMM_NULL) then
-           
-           ! receive data
-           ierr = iMOAB_ReceiveElementTag(cplbtrPID,&
-                                          btr2bcFields_btr,&
-                                          btrCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive btr2bcFields_btr on coupler")
-        endif
-
-        ! free send buffers
-        if (btrComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_FreeSenderBuffers(cmpbtrPID, cplbc)
-           call errorout(ierr,"failed to free send buffers 936")
-        endif
-
-        ! do remapping
-        if (cplComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ApplyScalarProjectionWeights(btr2bcPID,&
-                                                     0,&
-                                                     btr2bc_weights_identifier,&
-                                                     btr2bcFields_btr,&
-                                                     btr2bcFields)
-           call errorout(ierr,"failed to reproject btr2bc data to baroclinic mesh")
-
-           ! send data to cmpbc
-           ierr = iMOAB_SendElementTag(cplbcPID,&
-                                       btr2bcFields, &
-                                       bcCouComm,cmpbc)
-           call errorout(ierr,"failed to send btr2bcFields")
-        endif
-
-        ! receive data from coupler on baroclinic
-        if (bcComm .ne. MPI_COMM_NULL) then
-           ierr = iMOAB_ReceiveElementTag(cmpbcPID,&
-                                          btr2bcFields,&
-                                          bcCouComm,&
-                                          cplbc)
-           call errorout(ierr,"failed to receive btr2bcFields")
-        endif
         block_ptr => block_ptr % next
     enddo
 
@@ -1074,48 +873,25 @@ contains
         ! get barotropicThicknessFlux from 
         call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux',&
                                  barotropicThicknessFlux_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxZonal',&
-                                 barotropicThicknessFluxZonal_bc)
-        call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFluxMeridional',&
-                                 barotropicThicknessFluxMeridional_bc)
-        call mpas_pool_get_array(meshPool, 'cellsOnEdge', cellsOnEdge_bc)
-        call mpas_pool_get_array(meshPool, 'angleEdge', angleEdge_bc)
 
-        ! get remapped data from iMOAB
-        ierr = iMOAB_GetDoubleTagStorage(cmpbcPID,&
-                                         btr2bcFields,&
-                                         2*nCellsSolve_bc,&
-                                         1,&
-                                         btr2bcVar)
-        call errorout(ierr,"failed to get btr2bcVar from iMOAB")
-
-        ! unpack buffers
-        do iCell = 1,nCellsSolve_bc
-            barotropicThicknessFluxZonal_bc(iCell) = btr2bcVar(iCell)
-            barotropicThicknessFluxMeridional_bc(iCell) = btr2bcVar(iCell+nCellsSolve_bc)
-        enddo
-
-        ! exchange halos
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxZonal')
-        call mpas_dmpar_field_halo_exch(domain, 'barotropicThicknessFluxMeridional')
-
-        ! put into edge-based arrays
-        barotropicThicknessFlux_bc(:)=0_RKIND
-        do iEdge = 1,nEdgesSolve_bc
-           cell1 = cellsOnEdge_bc(1, iEdge)
-           cell2 = cellsOnEdge_bc(2,iEdge)
-           zonal_edge = 0.5_RKIND * (barotropicThicknessFluxZonal_bc(cell1) + &
-                                 barotropicThicknessFluxZonal_bc(cell2))
-           meridional_edge = 0.5_RKIND * (barotropicThicknessFluxMeridional_bc(cell1) + &
-                                      barotropicThicknessFluxMeridional_bc(cell2))
-           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_bc(iEdge) + &
-                                            cos(angleEdge_bc(iEdge))*zonal_edge + &
-                                            sin(angleEdge_bc(iEdge))*meridional_edge
-        enddo
+        if ( config_additional_barotropic_terms ) then
+           call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth',&
+                                    accumulatedDragOverDepth_bc)
+           call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag',&
+                                    accumulatedDrag_bc)
+        endif
 
         do iEdge = 1,nEdgesAll_bc
-           barotropicThicknessFlux_bc(iEdge)=barotropicThicknessFlux_btr(iEdge)
+           barotropicThicknessFlux_bc(iEdge) = barotropicThicknessFlux_btr(iEdge)
         enddo
+
+        if ( config_additional_barotropic_terms ) then
+           do iEdge = 1,nEdgesAll_bc
+              accumulatedDragOverDepth_bc(iEdge) = accumulatedDragOverDepth_btr(iEdge)
+              accumulatedDrag_bc(iEdge) = accumulatedDragOverDepth(iEdge)
+           enddo
+        endif
+
         block_ptr => block_ptr % next
     enddo
 #endif
@@ -1143,7 +919,10 @@ contains
                                                        sshNew,&
                                                        normalBarotropicVelocityCur,&
                                                        normalBarotropicVelocityNew,&
-                                                       sshTend) !{{{
+                                                       sshTend,&
+                                                       normalBaroclinicVelocityCur,&
+                                                       accumulatedDragOverDepth,&
+                                                       accumulatedDrag) !{{{
 
     !-----------------------------------------------------------------
     ! IMPORTANT NOTE:
@@ -1179,9 +958,14 @@ contains
                                                       sshNew,&
                                                       normalBarotropicVelocityCur,&
                                                       normalBarotropicVelocityNew
+    real (kind=RKIND), pointer, intent(inout), dimension(:,:) :: normalBaroclinicVelocityCur
                                                        
     ! tendPool
     real (kind=RKIND), pointer, intent(inout), dimension(:) :: sshTend
+
+    ! diagnosticsPool
+    real (kind=RKIND), pointer, intent(inout), dimension(:) :: accumulatedDragOverDepth,&
+       accumulatedDrag
 
     !-----------------------------------------------------------------
     ! output variables
@@ -1246,6 +1030,7 @@ contains
     call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
                              normalBarotropicVelocityNew, 2)
 
+    ! redirect arrays from tendency pool
     call mpas_pool_get_array(tendPool, 'ssh', sshTend)
 
     ! redirect barotropicForcing and barotropicThicknessFlux
@@ -1255,6 +1040,13 @@ contains
 
     call mpas_pool_get_array(diagnosticsPool, 'barotropicThicknessFlux', barotropicThicknessFlux)
 
+    ! if we are using additional barotropic terms also redirect those
+    if ( config_additional_barotropic_terms ) then 
+       call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+          normalBaroclinicVelocityCur, 1)
+       call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', accumulatedDragOverDepth)
+       call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', accumulatedDrag)
+    endif
 
 !-------------------------------------------------------------------------------
 

@@ -2954,6 +2954,16 @@
 			 packages="spatialModeSplitPKG"
 		/>
 
+		<var name="accumulatedDragOverDepth" type="real" dimensions="nCells Time" units="m s^-1"
+			 description="Drag divided by water depth accumulated over barotropic subcycles when using additional barotropic terms in split-explicit algorithm."
+			 packages="additionalBarotropicTermsPKG"
+        />
+
+		<var name="accumulatedDrag" type="real" dimensions="nCells Time" units="m s^-1"
+			 description="Drag accumulated over barotropic subcycles when using additional barotropic terms in split-explicit algorithm."
+			 packages="additionalBarotropicTermsPKG"
+        />
+
 		<var name="velocityX" type="real" dimensions="nVertLevels nCells Time" units="m s^-1"
 			 description="component of horizontal velocity in the x-direction (cartesian)"
 			 missing_value="FILLVAL" missing_value_mask="cellMask"

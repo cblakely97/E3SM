@@ -221,6 +221,194 @@ contains
 
 !***********************************************************************
 !
+!  routine ocn_vel_vmix_tend_implicit_linear
+!
+!> \brief   Computes tendencies for implicit momentum vertical mixing
+!> \author  Mark Petersen
+!> \date    September 2011
+!> \details
+!>  This routine computes the tendencies for implicit vertical mixing for momentum
+!>  using computed coefficients.
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_vel_vmix_tend_implicit_additional_btr_terms(dt, &
+         normalBaroclinicVelocity, normalBarotropicVelocity, &
+         accumulatedDragOverDepth, accumulatedDrag, vertViscTopOfEdge, &
+         layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
+         landIceEdgeFraction, normalVelocity, err) !{{{
+
+      !-----------------------------------------------------------------
+      !
+      ! input variables
+      !
+      !-----------------------------------------------------------------
+
+      real (kind=RKIND), dimension(:,:), intent(in) :: &
+         normalBaroclinicVelocity        !< Input: kinetic energy at cell
+
+      real (kind=RKIND), dimension(:), intent(in) :: &
+         normalBarotropicVelocity        !< Input: kinetic energy at cell
+
+      real (kind=RKIND), dimension(:), intent(in) :: accumulatedDragOverDepth, &
+         accumulatedDrag
+
+      real (kind=RKIND), dimension(:,:), intent(in) :: &
+         vertViscTopOfEdge !< Input: vertical mixing coefficients
+
+      real (kind=RKIND), intent(in) :: &
+         dt            !< Input: time step
+
+      real (kind=RKIND), dimension(:,:), intent(in) :: &
+         layerThickness !< Input: thickness at cell center
+
+      real (kind=RKIND), dimension(:,:), intent(in) :: &
+         layerThickEdgeDrag, &!< Input: mean thickness at edge
+         layerThickEdgeMean   !< Input: mean thickness at edge
+
+      real (kind=RKIND), dimension(:), intent(in) :: &
+         landIceEdgeFraction !< Input: land ice fraction
+
+      !-----------------------------------------------------------------
+      !
+      ! input/output variables
+      !
+      !-----------------------------------------------------------------
+
+      real (kind=RKIND), dimension(:,:), intent(inout) :: &
+         normalVelocity             !< Input: velocity
+
+      !-----------------------------------------------------------------
+      !
+      ! output variables
+      !
+      !-----------------------------------------------------------------
+
+      integer, intent(out) :: err !< Output: error flag
+
+      !-----------------------------------------------------------------
+      !
+      ! local variables
+      !
+      !-----------------------------------------------------------------
+
+      integer :: iEdge, k, cell1, cell2, N, Nsurf
+
+      real (kind=RKIND), dimension(:), allocatable :: A, B, C, D
+
+      err = 0
+
+      if(.not.velVmixOn) return
+
+      allocate(A(nVertLevels),B(nVertLevels),C(nVertLevels),D(nVertLevels))
+
+#ifdef MPAS_OPENACC
+      !$acc enter data create(A,B,C,D)
+
+      !$acc parallel loop present(maxLevelEdgeTop, minLevelEdgeBot, cellsOnEdge, &
+      !$acc    layerThickEdgeDrag, layerThickEdgeMean, layerThickness, vertViscTopOfEdge, &
+      !$acc    normalVelocity, landIceEdgeFraction, kineticEnergyCell) &
+      !$acc    private(Nsurf, N, cell1, cell2, A, bTemp, C, m, rTemp, k)
+#else
+      !$omp parallel
+      !$omp do schedule(runtime) private(Nsurf, N, cell1, cell2, A, bTemp, C, m, rTemp, k)
+#endif
+      do iEdge = 1, nEdgesOwned
+        cell1=cellsOnEdge(1,iEdge)
+        cell2=cellsOnEdge(2,iEdge)
+        N=maxLevelEdgeTop(iEdge)
+
+        !call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,N)
+
+        Nsurf = minLevelEdgeBot(iEdge)
+        if (N .gt. 0) then
+
+         cell1 = cellsOnEdge(1,iEdge)
+
+         ! one active layer
+         if (N .eq. Nsurf) then
+            write(6,*) "we shouldn't be able to get in here..."
+            normalVelocity(N,iEdge) = normalVelocity(N,iEdge)  &
+                / (1.0_RKIND + dt*(implicitTopDragCoef * landIceEdgeFraction(iEdge) + implicitBottomDragCoef) &
+                   * sqrt(kineticEnergyCell(N,cell1) + kineticEnergyCell(N,cell2)) / layerThickEdgeDrag(N,iEdge) )
+         else
+
+           ! build mass matrix [A, B, C] and RHS vector [D]
+           A(:) = 0d0
+           B(:) = 0d0
+           C(:) = 0d0
+           D(:) = 0d0
+
+           do k = Nsurf,N
+              ! set A(k)
+              if (k.EQ.1) then
+                 A(k) = 0d0
+              else
+                 A(k) = -2.0_RKIND*dt*vertViscTopOfEdge(k,iEdge)/&
+                    (layerThickEdgeMean(k,iEdge)*(layerThickEdgeMean(k,iEdge)+&
+                    layerThickEdgeMean(k-1,iEdge)))
+              endif
+              ! set C(k)
+              if (k.EQ.N) then
+                 C(k) = 0.0_RKIND
+              else
+                 C(k) = -2.0_RKIND*dt*vertViscTopOfEdge(k+1,iEdge)/&
+                    (layerThickEdgeMean(k,iEdge)*(layerThickEdgeMean(k+1,iEdge)+&
+                    layerThickEdgeMean(k,iEdge)))
+              endif
+              ! set B(k)
+              B(k) = 1.0_RKIND - A(k) - C(k)
+              ! set D(k)
+              if (k.EQ.N) then
+                 D(k) = normalBaroclinicVelocity(k,iEdge) + &
+                    normalBarotropicVelocity(iEdge) + &
+                    dt*accumulatedDragOverDepth(iEdge) - &
+                    accumulatedDrag(iEdge)*dt/layerThickEdgeMean(k,iEdge)
+              else
+                 D(k) = normalBaroclinicVelocity(k,iEdge) + &
+                    normalBarotropicVelocity(iEdge) + &
+                    dt*accumulatedDragoverDepth(iEdge)
+              endif
+
+           end do
+
+           ! solve with tridiagonal matrix solver algorithm
+           ! set modified coefficients
+           do k = Nsurf+1,N
+              m = A(k)/B(k-1)
+              B(k) = B(k)-m*C(k-1)
+              D(k) = D(k)-m*D(k-1)
+           end do
+
+           ! back substitute to solve
+           normalVelocity(N,iEdge) = D(N)/B(N)
+           do k = N-1,Nsurf,-1
+              normalVelocity(k,iEdge) = (D(k)-C(k)*normalVelocity(k+1,iEdge))/B(k)
+           end do
+
+           normalVelocity(1:Nsurf-1,iEdge) = 0.0_RKIND
+           normalVelocity(N+1:nVertLevels,iEdge) = 0.0_RKIND
+
+         end if ! N=Nsurf, i.e. single layer
+        end if
+      end do
+#ifndef MPAS_OPENACC
+      !$omp end do
+      !$omp end parallel
+#endif
+
+#ifdef MPAS_OPENACC
+      !$acc exit data delete(A,B,C,D)
+#endif
+
+      deallocate(A,B,C,D)
+
+   !--------------------------------------------------------------------
+
+   end subroutine ocn_vel_vmix_tend_implicit_linear!}}}
+
+!***********************************************************************
+!
 !  routine ocn_vel_vmix_tend_implicit_rayleigh
 !
 !> \brief   Computes tendencies for implicit momentum vertical mixing
@@ -1330,7 +1518,8 @@ contains
 !
 !-----------------------------------------------------------------------
 
-   subroutine ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, scratchPool, err, timeLevelIn)!{{{
+   subroutine ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, diagnosticsPool, &
+         scratchPool, err, timeLevelIn)!{{{
       real (kind=RKIND), intent(in) :: dt
       type (mpas_pool_type), intent(in) :: meshPool
       type (mpas_pool_type), intent(inout) :: statePool
@@ -1348,6 +1537,11 @@ contains
       real (kind=RKIND), dimension(:,:), pointer :: tracerGroupSurfaceFlux
       real (kind=RKIND), dimension(:,:,:), pointer :: tracersGroup
       real (kind=RKIND), dimension(:,:,:), allocatable :: nonLocalFluxTend
+
+      ! if using additional barotropic terms
+      real (kind=RKIND), dimension(:), pointer :: accumulatedDragOverDepth, accumulatedDrag, &
+         normalBarotropicVelocityNew
+      real (kind=RKIND), dimension(:,:), pointer :: normalBaroclinicVelocityNew
 
       type (mpas_pool_iterator_type) :: groupItr
 
@@ -1419,6 +1613,18 @@ contains
       call mpas_timer_start('vmix coefs', .false.)
       call ocn_vmix_coefs(meshPool, statePool, forcingPool, scratchPool, err, timeLevel)
       call mpas_timer_stop('vmix coefs')
+
+      ! if using additional barotropic terms
+      if (config_additional_barotropic_terms ) then
+         call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', &
+            accumulatedDragOverDepth)
+         call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', &
+            accumulatedDrag)
+         call mpas_pool_get_array(statePool, 'normalBarotropicVelocity', &
+            normalBarotropicVelocityNew, 2)
+         call mpas_pool_get_array(statePool, 'normalBaroclinicVelocity', &
+            normalBaroclinicVelocityNew, 2)
+      endif
 
       ! if using CVMix, then viscosity has to be averaged from cell centers to cell edges
       if ( config_use_cvmix ) then
@@ -1498,9 +1704,17 @@ contains
 
       case (dragTypeConst)
 
-        call ocn_vel_vmix_tend_implicit(dt, kineticEnergyCell, &
-          vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
-          landIceEdgeFraction, normalVelocity, err)
+         if ( config_additional_barotropic_terms ) then
+            call ocn_vel_vmix_tend_implicit_additional_btr_terms(dt, &
+               normalBaroclinicVelocity, normalBarotropicVelocity, &
+               accumulatedDragOverDepth, accumulatedDrag, vertViscTopOfEdge, &
+               layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
+               landIceEdgeFraction, normalVelocity, err)
+         else
+            call ocn_vel_vmix_tend_implicit(dt, kineticEnergyCell, &
+              vertViscTopOfEdge, layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
+              landIceEdgeFraction, normalVelocity, err)
+         endif
 
       case (dragTypeRayleigh)
 
