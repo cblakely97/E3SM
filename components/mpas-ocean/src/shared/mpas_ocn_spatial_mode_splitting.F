@@ -888,7 +888,7 @@ contains
         if ( config_additional_barotropic_terms ) then
            do iEdge = 1,nEdgesAll_bc
               accumulatedDragOverDepth_bc(iEdge) = accumulatedDragOverDepth_btr(iEdge)
-              accumulatedDrag_bc(iEdge) = accumulatedDragOverDepth(iEdge)
+              accumulatedDrag_bc(iEdge) = accumulatedDrag_btr(iEdge)
            enddo
         endif
 

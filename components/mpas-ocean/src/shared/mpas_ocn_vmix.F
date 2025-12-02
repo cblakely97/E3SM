@@ -296,6 +296,8 @@ contains
 
       real (kind=RKIND), dimension(:), allocatable :: A, B, C, D
 
+      real (kind=RKIND) :: m
+
       err = 0
 
       if(.not.velVmixOn) return
@@ -405,7 +407,7 @@ contains
 
    !--------------------------------------------------------------------
 
-   end subroutine ocn_vel_vmix_tend_implicit_linear!}}}
+   end subroutine ocn_vel_vmix_tend_implicit_additional_btr_terms!}}}
 
 !***********************************************************************
 !
@@ -1524,6 +1526,7 @@ contains
       type (mpas_pool_type), intent(in) :: meshPool
       type (mpas_pool_type), intent(inout) :: statePool
       type (mpas_pool_type), intent(inout) :: forcingPool
+      type (mpas_pool_type), intent(inout) :: diagnosticsPool
       type (mpas_pool_type), intent(in) :: scratchPool !< Input/Output: Scratch structure
       integer, intent(out) :: err
       integer, intent(in), optional :: timeLevelIn
@@ -1706,7 +1709,7 @@ contains
 
          if ( config_additional_barotropic_terms ) then
             call ocn_vel_vmix_tend_implicit_additional_btr_terms(dt, &
-               normalBaroclinicVelocity, normalBarotropicVelocity, &
+               normalBaroclinicVelocityNew, normalBarotropicVelocityNew, &
                accumulatedDragOverDepth, accumulatedDrag, vertViscTopOfEdge, &
                layerThickness, layerThickEdgeDrag, layerThickEdgeMean, &
                landIceEdgeFraction, normalVelocity, err)

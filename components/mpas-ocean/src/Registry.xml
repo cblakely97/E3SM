@@ -2954,12 +2954,12 @@
 			 packages="spatialModeSplitPKG"
 		/>
 
-		<var name="accumulatedDragOverDepth" type="real" dimensions="nCells Time" units="m s^-1"
+		<var name="accumulatedDragOverDepth" type="real" dimensions="nEdges Time" units="m s^-1"
 			 description="Drag divided by water depth accumulated over barotropic subcycles when using additional barotropic terms in split-explicit algorithm."
 			 packages="additionalBarotropicTermsPKG"
         />
 
-		<var name="accumulatedDrag" type="real" dimensions="nCells Time" units="m s^-1"
+		<var name="accumulatedDrag" type="real" dimensions="nEdges Time" units="m s^-1"
 			 description="Drag accumulated over barotropic subcycles when using additional barotropic terms in split-explicit algorithm."
 			 packages="additionalBarotropicTermsPKG"
         />

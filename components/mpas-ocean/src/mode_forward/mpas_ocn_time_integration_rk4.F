@@ -1428,7 +1428,7 @@ module ocn_time_integration_rk4
       integer :: iCell, iEdge, k
 
       type (mpas_pool_type), pointer :: statePool, tendPool, meshPool
-      type (mpas_pool_type), pointer :: tracersPool, tracersTendPool
+      type (mpas_pool_type), pointer :: tracersPool, tracersTendPool, diagnosticsPool
 
       real (kind=RKIND), dimension(:, :), pointer :: normalVelocityNew, normalVelocityTend
       real (kind=RKIND), dimension(:, :), pointer :: layerThicknessNew, layerThicknessTend
@@ -1454,6 +1454,7 @@ module ocn_time_integration_rk4
       call mpas_pool_get_subpool(block % structs, 'state', statePool)
       call mpas_pool_get_subpool(block % structs, 'tend', tendPool)
       call mpas_pool_get_subpool(block % structs, 'mesh', meshPool)
+      call mpas_pool_get_subpool(block % structs, 'diagnostics', diagnosticsPool)
 
       call mpas_pool_get_subpool(statePool, 'tracers', tracersPool)
       call mpas_pool_get_subpool(tendPool, 'tracersTend', tracersTendPool)
@@ -1559,6 +1560,7 @@ module ocn_time_integration_rk4
       integer :: iCell, iEdge, k
 
       type (mpas_pool_type), pointer :: statePool, meshPool, verticalMeshPool, forcingPool
+      type (mpas_pool_type), pointer :: diagnosticsPool
       type (mpas_pool_type), pointer :: scratchPool
       type (mpas_pool_type), pointer :: tracersPool
 
@@ -1596,6 +1598,7 @@ module ocn_time_integration_rk4
       call mpas_pool_get_subpool(block % structs, 'verticalMesh', verticalMeshPool)
       call mpas_pool_get_subpool(block % structs, 'forcing', forcingPool)
       call mpas_pool_get_subpool(block % structs, 'scratch', scratchPool)
+      call mpas_pool_get_subpool(block % structs, 'diagnostics', diagnosticsPool)
 
       call mpas_pool_get_subpool(statePool, 'tracers', tracersPool)
 
@@ -1704,7 +1707,8 @@ module ocn_time_integration_rk4
       !$acc             surfaceFluxAttenuationCoefficientRunoff)
 #endif
 
-      call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, scratchPool, err, 2)
+      call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
+         diagnosticsPool, scratchPool, err, 2)
 
    end subroutine ocn_time_integrator_rk4_cleanup!}}}
 

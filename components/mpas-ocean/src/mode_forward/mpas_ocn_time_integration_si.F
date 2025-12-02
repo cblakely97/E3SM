@@ -235,6 +235,7 @@ module ocn_time_integration_si
 
       type (mpas_pool_type), pointer :: &
          statePool,         &! structure holding state variables
+         diagnosticsPool,         &! structure holding diagnostics variables
          tracersPool,       &! structure holding tracers
          meshPool,          &! structure holding mesh variables
          verticalMeshPool,  &! structure holding vertical mesh variables
@@ -431,6 +432,8 @@ module ocn_time_integration_si
                                                  verticalMeshPool)
       call mpas_pool_get_subpool(block%structs, 'state', &
                                                  statePool)
+      call mpas_pool_get_subpool(block%structs, 'diagnostics', &
+                                                 diagnosticsPool)
       call mpas_pool_get_subpool(block%structs, 'forcing', &
                                                  forcingPool)
       call mpas_pool_get_subpool(block%structs, 'shortwave', &
@@ -2888,7 +2891,7 @@ module ocn_time_integration_si
 #endif
 
       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
-                             scratchPool, err, 2)
+                             diagnosticsPool, scratchPool, err, 2)
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of

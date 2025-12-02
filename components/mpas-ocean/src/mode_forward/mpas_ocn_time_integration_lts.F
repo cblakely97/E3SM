@@ -116,6 +116,7 @@ module ocn_time_integration_lts
        meshPool, & ! structure holding mesh variables
        verticalMeshPool, & ! structure holding mesh variables
        forcingPool, & ! structure holding forcing variables
+       diagnosticsPool, & ! structure holding diagnostics variables
        scratchPool, & ! structure holding temporary variables
        tracersPool  ! structure holding tracers variables
 
@@ -208,6 +209,8 @@ module ocn_time_integration_lts
                                                statePool)
     call mpas_pool_get_subpool(block%structs, 'forcing', &
                                                forcingPool)
+    call mpas_pool_get_subpool(block%structs, 'diagnostics', &
+                                               diagnosticsPool)
     call mpas_pool_get_subpool(block%structs, 'LTS', &
                                                LTSPool)
     call mpas_pool_get_subpool(block%structs, 'tend', &
@@ -1002,7 +1005,7 @@ module ocn_time_integration_lts
     call mpas_timer_start("lts implicit vmix")
     if (.not. config_disable_vel_vmix) then
        call ocn_diagnostic_solve(dt, statePool, forcingPool, meshPool, verticalMeshPool, scratchPool, tracersPool, 2)
-       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, scratchPool, err, 2)
+       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, diagnosticsPool, scratchPool, err, 2)
        call mpas_dmpar_field_halo_exch(domain, 'normalVelocity', timeLevel=2)
        call mpas_dmpar_field_halo_exch(domain, 'layerThickness', timeLevel=2)
     end if   

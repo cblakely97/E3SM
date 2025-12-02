@@ -161,6 +161,7 @@ module ocn_time_integration_split_ab2
          tendPool,          &! structure holding tendencies
          tracersTendPool,   &! structure holding tracer tendencies
          forcingPool,       &! structure holding forcing variables
+         diagnosticsPool,       &! structure holding diagnostics variables
          scratchPool,       &! structure holding temporary variables
          swForcingPool,     &! structure holding short-wave forcing vars
          tracersIdealAgeFieldsPool     ! structure holding idealAge-related fields
@@ -339,6 +340,8 @@ module ocn_time_integration_split_ab2
                                                  statePool)
       call mpas_pool_get_subpool(block%structs, 'forcing', &
                                                  forcingPool)
+      call mpas_pool_get_subpool(block%structs, 'diagnostics', &
+                                                 diagnosticsPool)
       call mpas_pool_get_subpool(block%structs, 'shortwave', &
                                                  swForcingPool)
       call mpas_pool_get_subpool(block%structs, 'tend', &
@@ -2698,7 +2701,7 @@ module ocn_time_integration_split_ab2
 #endif
 
       call ocn_vmix_implicit(dt, meshPool, statePool, forcingPool, &
-                             scratchPool, err, 2)
+                             diagnosticsPool, scratchPool, err, 2)
 
       ! Update halo on u and tracers, which were just updated for
       ! implicit vertical mixing.  If not done, this leads to lack of

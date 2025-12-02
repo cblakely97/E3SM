@@ -149,6 +149,7 @@ module ocn_time_integration_split
 
       type (mpas_pool_type), pointer :: &
          statePool,         &! structure holding state variables
+         diagnosticsPool,         &! structure holding diagnostics variables
          tracersPool,       &! structure holding tracers
          meshPool,          &! structure holding mesh variables
          verticalMeshPool,  &! structure holding vertical mesh variables
@@ -344,6 +345,9 @@ module ocn_time_integration_split
       call mpas_pool_get_subpool(block%structs, 'verticalMesh', &
                                                  verticalMeshPool)
 
+      call mpas_pool_get_subpool(block%structs, 'diagnostics', &
+                                                 diagnosticsPool)
+
       if ( config_spatial_mode_splitting) then
 
         ! "next" domain is barotropic domain
@@ -467,6 +471,7 @@ module ocn_time_integration_split
          surfaceStressMagnitude_btr => surfaceStressMagnitude_bc
 
          ! set pointers for accumulated drag terms
+         write(6,*) "about to get accumulatedDrag terms"
          call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', &
             accumulatedDragOverDepth)
          call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', &
@@ -940,7 +945,7 @@ module ocn_time_integration_split
                                                          sshNew,&
                                                          normalBarotropicVelocityCur,&
                                                          normalBarotropicVelocityNew,&
-                                                         sshTend,
+                                                         sshTend,&
                                                          normalBaroclinicVelocityCur,&
                                                          accumulatedDragOverDepth,&
                                                          accumulatedDrag)
@@ -1942,7 +1947,10 @@ module ocn_time_integration_split
                                                            sshNew,&
                                                            normalBarotropicVelocityCur,&
                                                            normalBarotropicVelocityNew,&
-                                                           sshTend)
+                                                           sshTend,&
+                                                           normalBaroclinicVelocityCur,&
+                                                           accumulatedDragOverDepth,&
+                                                           accumulatedDrag)
 
               ! reassign baroclinicThickness
               deallocate(baroclinicThickness)
