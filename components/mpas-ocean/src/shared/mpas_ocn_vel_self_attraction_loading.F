@@ -63,7 +63,9 @@ module ocn_vel_self_attraction_loading
     !--------------------------------------------------------------------
 
     public :: ocn_compute_self_attraction_loading, &
-              ocn_vel_self_attraction_loading_init
+              ocn_vel_self_attraction_loading_init, &
+              check,&
+              interpolate
 
     !--------------------------------------------------------------------
     !

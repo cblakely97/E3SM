@@ -471,7 +471,6 @@ module ocn_time_integration_split
          surfaceStressMagnitude_btr => surfaceStressMagnitude_bc
 
          ! set pointers for accumulated drag terms
-         write(6,*) "about to get accumulatedDrag terms"
          call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', &
             accumulatedDragOverDepth)
          call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', &
