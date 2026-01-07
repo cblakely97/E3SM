@@ -134,7 +134,6 @@ module ocn_mesh
 
    ! Multiplicative masks and vectors for various conditions
    real(kind=RKIND), public, dimension(:, :), allocatable :: &
-      edgeMask, &! mask to denote active edges    with depth
       cellMask, &! mask to denote active cells    with depth
       vertexMask, &! mask to denote active vertices with depth
       boundaryEdge, &! mask for boundary edges    at each level
@@ -142,6 +141,9 @@ module ocn_mesh
       boundaryVertex, &! mask for boundary vertices at each level
       edgeSignOnCell, &! sign of edge contributions to a cell
       edgeSignOnVertex ! sign of edge contributions to a vertex
+
+   real (kind=RKIND), public, dimension(:, :), allocatable, target :: &
+      edgeMask ! mask to denote active edges    with depth
 
    real(kind=RKIND), public, dimension(:, :), pointer :: &
       weightsOnEdge, &! weights on each edge
@@ -170,7 +172,8 @@ module ocn_mesh
    public :: &
       ocn_meshCreate, &
       ocn_meshUpdateFields, &
-      ocn_meshDestroy
+      ocn_meshDestroy, &
+      ocn_mesh_return_vertical_limits
    !}}}
 
 !***********************************************************************
@@ -1837,6 +1840,43 @@ contains
    end subroutine ocn_meshScaling !}}}
 
 !***********************************************************************
+!
+!  routine ocn_mesh_return_vertical_limits
+!
+!> \brief   Returns kmax for spatial mode splitting
+!> \author  Coleman Blakely
+!> \date    November 2025
+!> \details
+!>  In case of spatial mode splitting returns appropriate index for 
+!>  vertical loops
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)!{{{
+
+      !-----------------------------------------------------------------
+      ! input/output variables
+      !-----------------------------------------------------------------
+
+      integer, intent(in) :: iEdge
+      integer, intent(inout) :: cell1
+      integer, intent(inout) :: cell2
+      integer, intent(inout) :: kmax
+
+      cell1=cellsOnEdge(1,iEdge)
+      cell2=cellsOnEdge(2,iEdge)
+      kmax=maxLevelEdgeTop(iEdge)
+
+      if ( .NOT. config_spatial_mode_splitting ) then
+         return
+      endif
+
+      if (cell2.EQ.nCellsAll+1) then
+         cell2=cell1
+         kmax=maxLevelCell(cell1)
+      endif
+
+   end subroutine ocn_mesh_return_vertical_limits!}}}
 
 end module ocn_mesh
 

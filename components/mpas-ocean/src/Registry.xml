@@ -2539,19 +2539,19 @@
 		/>
 		<var name="minLevelEdgeTop" type="integer" dimensions="nEdges"
 			 description="Index to the first edge in a column with at least one active ocean cell on either side of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelEdgeTop" type="integer" dimensions="nEdges"
 			 description="Index to the last edge in a column with active ocean cells on both sides of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelEdgeBot" type="integer" dimensions="nEdges"
 			 description="Index to the first edge in a column with active ocean cells on both sides of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelEdgeBot" type="integer" dimensions="nEdges"
 			 description="Index to the last edge in a column with at least one active ocean cell on either side of it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelVertexTop" type="integer" dimensions="nVertices"
 			 description="Index to the first vertex in a column with at least one active ocean cell around it."
@@ -2586,6 +2586,14 @@
 		/>
 		<var name="boundaryCell" type="integer" dimensions="nVertLevels nCells"
 			 description="Mask for determining boundary cells. A boundary cell has at least one inactive cell neighboring it."
+		/>
+		<var name="edgeMask_spatial_split_bc" type="real" dimensions="nVertLevels nEdges"
+			 description="Mask on edges that determines if computations should be done on edges."
+			 packages="spatialModeSplitPKG"
+		/>
+		<var name="edgeMask_spatial_split_btr" type="real" dimensions="nVertLevels nEdges"
+			 description="Mask on edges that determines if computations should be done on edges."
+			 packages="spatialModeSplitPKG"
 		/>
 		<var name="edgeMask" type="integer" dimensions="nVertLevels nEdges"
 			 description="Mask on edges that determines if computations should be done on edges."

@@ -316,11 +316,8 @@ contains
       !$omp do schedule(runtime) private(Nsurf, N, cell1, cell2, A, bTemp, C, m, rTemp, k)
 #endif
       do iEdge = 1, nEdgesOwned
-        cell1=cellsOnEdge(1,iEdge)
-        cell2=cellsOnEdge(2,iEdge)
-        N=maxLevelEdgeTop(iEdge)
 
-        !call ocn_spatial_mode_splitting_return_vertical_limits(iEdge,cell1,cell2,N)
+        call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,N)
 
         Nsurf = minLevelEdgeBot(iEdge)
         if (N .gt. 0) then

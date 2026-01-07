@@ -64,6 +64,13 @@ module ocn_spatial_mode_splitting
     !
     !--------------------------------------------------------------------
 
+    ! Multiplicative masks and vectors for various conditions
+!    real(kind=RKIND), public, target, allocatable :: edgeMask_spatial_split_btr(:,:),&
+!                                                     edgeMask_spatial_split_bc(:,:)
+    integer, public, target, allocatable :: maxLevelEdgeTop_spatial_split(:)
+    real(kind=RKIND), public, pointer :: edgeMask_spatial_split_btr(:,:),&
+                                                     edgeMask_spatial_split_bc(:,:)
+
     !--------------------------------------------------------------------
     !
     ! Public member functions
@@ -76,7 +83,8 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_btr2bc_remapping,&
               ocn_spatial_mode_splitting_time_int_split_setup_btr,&
               ocn_spatial_mode_splitting_dmpar_init_bc,&
-              ocn_spatial_mode_splitting_dmpar_init_btr
+              ocn_spatial_mode_splitting_dmpar_init_btr,&
+              ocn_spatial_mode_splitting_set_edgeMask_btr
 
     !--------------------------------------------------------------------
     !
@@ -1218,7 +1226,7 @@ contains
     type(mpas_pool_type), pointer :: diagnosticsPool
 
     ! loop indices
-    integer :: i, k, n
+    integer :: i, k, n, iEdge
     integer :: ierr
 
     ! End preamble
@@ -1284,6 +1292,17 @@ contains
           normalBaroclinicVelocityCur, 1)
        call mpas_pool_get_array(diagnosticsPool, 'accumulatedDragOverDepth', accumulatedDragOverDepth)
        call mpas_pool_get_array(diagnosticsPool, 'accumulatedDrag', accumulatedDrag)
+    endif
+
+    ! reset edgeMask appropriately if on baroclinic domain
+    if (domain % domainID .eq. 0) then
+       ! populate edgeMask with edgeMask_spatial_split_bc
+       do iEdge=1,nEdgesAll
+          !maxLevelEdgeTop(iEdge)=maxLevelEdgeTop_spatial_split(iEdge)
+          do k=1,nVertLevels
+             edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+          enddo
+       enddo
     endif
 
 !-------------------------------------------------------------------------------
@@ -1792,6 +1811,173 @@ contains
 
 
     end subroutine ocn_spatial_mode_splitting_dmpar_init_btr !}}}
+
+!***********************************************************************
+!
+!  ocn_spatial_mode_splitting_set_edgeMask_btr
+!
+!> \brief sets edgeMask_btr to allow for barotropic but not baroclinic 
+!>        flow and fluxes to propagate through the edges of the
+!>        baroclinic domain.
+!> \author Coleman Blakely
+!> \date   March, 2025
+!> \details
+!
+!-----------------------------------------------------------------------
+
+    subroutine ocn_spatial_mode_splitting_set_edgeMask_btr(domain) !{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type (domain_type), intent(in) :: domain
+
+    !-----------------------------------------------------------------
+    ! input/output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! pools
+    type (mpas_pool_type), pointer :: meshPool
+
+    ! mesh dimensions
+    integer, pointer :: nEdgesAll_bc, nVertLevels_bc
+
+    ! for finding the bottom of the cell
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc
+    integer, dimension(:,:), pointer :: cellsOnEdge_bc
+    integer, dimension(:), pointer :: maxLevelEdgeTop_bc, maxLevelCell_bc
+
+    ! for loops
+    integer :: iCell, iVertex, iEdge, k, kmin, kmax
+
+    !
+    integer :: cell1,cell2,vertex1,vertex2
+
+    !
+    integer :: edge_index, vertex_index, cell_index
+
+    logical :: is_boundary_edge, is_boundary_cell
+
+    integer :: nVerticesOnEdge=2
+
+    ! for identifying both cells which are on the boundary and cells which border those on the
+    ! boundary
+    integer, dimension(:), allocatable :: isBoundaryCell, isSecondRowCell
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+    ! preallocate our arrays to tag boundary cells and boundary edges
+    allocate( isBoundaryCell(nCellsAll+1), isSecondRowCell(nCellsAll+1))
+    isBoundaryCell(:)=0
+    isSecondRowCell(:)=0
+
+    ! loop over all cells and identify all boundary cells
+    do iCell=1,nCellsAll
+       do iEdge=1,nEdgesOnCell(iCell)
+          edge_index=edgesOnCell(iEdge,iCell)
+          ! only have to check if cell2=nCellsAll+1 since cell1 never will
+          cell2=cellsOnEdge(2,edge_index)
+          if (cell2.EQ.nCellsAll+1) then
+             isBoundaryCell(iCell)=1
+          endif
+       enddo
+    enddo
+
+    ! loop over again and find all second row cells
+    do iCell=1,nCellsAll
+       do iEdge=1,nEdgesOnCell(iCell)
+          edge_index=edgesOnCell(iEdge,iCell)
+          cell1=cellsOnEdge(1,edge_index)
+          cell2=cellsOnEdge(2,edge_index)
+          if ((isBoundaryCell(cell1).EQ.1).OR.&
+               (isBoundaryCell(cell2).EQ.1)) then
+             isSecondRowCell(iCell)=1
+          endif
+       enddo
+    enddo
+
+
+    ! get bottom depth of baroclinic mesh
+    call mpas_pool_get_subpool(domain % blocklist % structs, 'mesh', meshPool)
+    call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_bc',edgeMask_spatial_split_bc)
+    call mpas_pool_get_array(meshPool, 'edgeMask_spatial_split_btr',edgeMask_spatial_split_btr)
+
+    ! we want edgeMask_btr to essentially be the same as edge mask but with boundary cells having
+    ! values of 1 down to maxLevelCell
+    edgeMask_spatial_split_btr(:,:)=0d0
+
+    ! recreate edgeMask
+    do iEdge=1,nEdgesAll
+       do k=minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
+          edgeMask_spatial_split_btr(k,iEdge)=1d0
+       enddo
+    enddo
+
+    ! check boundary cells and fill them out
+    do iCell=1,nCellsAll
+       if (isBoundaryCell(iCell).EQ.1) then
+          ! identify kmax 
+          kmax=maxLevelCell(iCell)
+          do k=1,maxEdges
+             cell1=cellsOnCell(k,iCell)
+             if (maxLevelCell(cell1).EQ.0) then
+                cycle
+             endif
+             kmax=MIN(kmax,maxLevelCell(cell1))
+          enddo
+          do iEdge=1,nEdgesOnCell(iCell)
+             do k=1,kmax
+                edgeMask_spatial_split_btr(k,edgesOnCell(iEdge,iCell))=1d0
+             enddo
+          enddo
+       endif
+    enddo
+
+    ! we want edgeMask_bc to have zeroes on all edges which are only part of boundary cells. This
+    ! happens when at least one vertex of an edge has a value of nCellsAll+1 in cellsOnVertex
+    edgeMask_spatial_split_bc(:,:)=0d0
+
+    ! recreate edgeMask
+    do iEdge=1,nEdgesAll
+       do k=minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
+          edgeMask_spatial_split_bc(k,iEdge)=1d0
+       enddo
+    enddo
+
+    do iEdge=1,nEdgesAll
+       cell1=cellsOnEdge(1,iEdge)
+       cell2=cellsOnEdge(2,iEdge)
+       if ((isBoundaryCell(cell1).EQ.1).OR.(isBoundaryCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isBoundaryCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isBoundaryCell(cell2).EQ.1).AND.(isSecondRowCell(cell1).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       elseif ((isSecondRowCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
+          edgeMask_spatial_split_bc(:,iEdge)=0d0
+       endif
+    enddo
+
+    ! populate edgeMask with edgeMask_spatial_split_bc
+    do iEdge=1,nEdgesAll
+       do k=1,nVertLevels
+          edgeMask(k,iEdge)=edgeMask_spatial_split_bc(k,iEdge)
+       enddo
+    enddo
+
+!-------------------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_set_edgeMask_btr !}}}
 
 end module ocn_spatial_mode_splitting
 !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||

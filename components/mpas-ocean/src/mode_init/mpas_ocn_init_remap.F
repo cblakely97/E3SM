@@ -25,6 +25,7 @@ module ocn_init_remap
    use mpas_pool_routines
    use mpas_constants
    use mpas_dmpar
+   use ocn_mesh
 
    use ocn_constants
    use ocn_config
@@ -105,11 +106,12 @@ contains
     integer, dimension(:,:), pointer :: cellsOnEdge
     real (kind=RKIND), dimension(:), pointer :: angleEdge
     
-    real (kind=RKIND), dimension(:), pointer :: barotropicForcingZonal_bc,&
+    real (kind=RKIND), dimension(:), pointer :: barotropicForcing_bc,&
                                                 barotropicForcingMeridional_bc
-    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFluxZonal_btr,&
+    real (kind=RKIND), dimension(:), pointer :: barotropicThicknessFlux_btr,&
                                                 barotropicThicknessFluxMeridional_btr
     integer, pointer :: nCellsSolve_bc, nCellsAll_bc, nCellsSolve_btr, nCellsAll_btr
+    integer, pointer :: nEdgesSolve_bc, nEdgesAll_bc, nEdgesSolve_btr, nEdgesAll_btr
     real (kind=RKIND), dimension(:), pointer :: xEdge, yEdge
     iErr = 0
 
@@ -182,17 +184,14 @@ contains
        ! get input barotropicForcing on baroclinic mesh and zero out halos
        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
        call mpas_pool_get_dimension(meshPool, 'nCellsOwned', nCellsAll_bc)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingZonal',&
-                                barotropicForcingZonal_bc)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicForcingMeridional',&
-                                barotropicForcingMeridional_bc)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+       call mpas_pool_get_dimension(meshPool, 'nEdgesOwned', nEdgesAll_bc)
 
-!       do iCell = nCellsSolve_bc,nCellsAll_bc
-!          barotropicForcingZonal_bc(iCell) = 0d0
-!          barotropicForcingMeridional_bc(iCell) = 0d0
-!       enddo
+       call mpas_pool_get_array(diagnosticsPool,&
+                                'barotropicForcing',&
+                                barotropicForcing_bc)
+       barotropicForcing_bc(:)=0.1_RKIND
+
 
        block_ptr => block_ptr % next
     end do
@@ -210,14 +209,13 @@ contains
        call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_btr)
        call mpas_pool_get_dimension(meshPool, 'nCellsAll', nCellsAll_btr)
        call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxZonal',&
-                                barotropicThicknessFluxZonal_btr)
-       call mpas_pool_get_array(diagnosticsPool,&
-                                'barotropicThicknessFluxMeridional',&
-                                barotropicThicknessFluxMeridional_btr)
+                                'barotropicThicknessFlux',&
+                                barotropicThicknessFlux_btr)
+
+       barotropicThicknessFlux_btr(:)=0.2_RKIND
 
 !       do iCell = nCellsSolve_btr,nCellsAll_btr
-!          barotropicThicknessFluxZonal_btr(iCell) = 0d0
+!          barotropicThicknessFlux_btr(iCell) = 0d0
 !          barotropicThicknessFluxMeridional_btr(iCell) = 0d0
 !       enddo
 
@@ -230,6 +228,8 @@ contains
     !--------------------------------------------------------------------
 
     call ocn_spatial_mode_splitting_init_moab_domain(domain)
+    write(6,*) "initialized baroclinic moab"
+    call ocn_meshCreate(domain)
     call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
 
     !--------------------------------------------------------------------

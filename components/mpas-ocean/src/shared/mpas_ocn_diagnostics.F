@@ -853,9 +853,7 @@ contains
 #endif
       do iEdge = 1, nEdgesAll
          kmin = minLevelEdgeBot(iEdge)
-         kmax = maxLevelEdgeTop(iEdge)
-         cell1 = cellsOnEdge(1,iEdge)
-         cell2 = cellsOnEdge(2,iEdge)
+         call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)
          do k = 1,nVertLevels
             ! initialize layerThicknessEdgeMean to avoid divide by
             ! zero and NaN problems.
@@ -912,9 +910,7 @@ contains
 #endif
          do iEdge = 1, nEdgesAll
             kmin = minLevelEdgeBot(iEdge)
-            kmax = maxLevelEdgeTop(iEdge)
-            cell1 = cellsOnEdge(1,iEdge)
-            cell2 = cellsOnEdge(2,iEdge)
+            call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)
             do k=1,nVertLevels
                ! initialize layerThicknessEdgeFlux to avoid divide by
                ! zero and NaN problems.
