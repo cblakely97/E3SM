@@ -227,22 +227,39 @@ contains
     ! initialize moab for spatial mode splitting
     !--------------------------------------------------------------------
 
-    call ocn_spatial_mode_splitting_init_moab_domain(domain)
-    write(6,*) "initialized baroclinic moab"
+    write(6,*) "init_remap line 230"
     call ocn_meshCreate(domain)
+    write(6,*) "init_remap line 232"
+    call ocn_spatial_mode_splitting_init_moab_domain(domain)
+    write(6,*) "init_remap line 234"
+
+    call ocn_meshDestroy(iErr)
+    call ocn_meshCreate(domain % next)
+    write(6,*) "init_remap line 237"
     call ocn_spatial_mode_splitting_init_moab_domain(domain % next)
+    write(6,*) "init_remap line 239"
+    call ocn_spatial_mode_splitting_dmpar_init_bc(domain)
+    call ocn_spatial_mode_splitting_dmpar_init_btr(domain % next)
 
     !--------------------------------------------------------------------
     ! baroclinic => barotropic
     !--------------------------------------------------------------------
 
+    call ocn_meshCreate(domain)
+    write(6,*) "init_remap line 246"
     call ocn_spatial_mode_splitting_bc2btr_remapping(domain)
+    write(6,*) "init_remap line 248"
+    call ocn_meshDestroy(iErr)
+    write(6,*) "init_remap line 250"
 
     !--------------------------------------------------------------------
     ! barotropic => baroclinic
     !--------------------------------------------------------------------
 
+    call ocn_meshCreate(domain % next)
+    write(6,*) "init_remap line 257"
     call ocn_spatial_mode_splitting_btr2bc_remapping(domain)
+    write(6,*) "init_remap line 259"
     !--------------------------------------------------------------------
 
   end subroutine ocn_init_setup_remap!}}}

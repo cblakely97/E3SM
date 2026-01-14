@@ -763,8 +763,8 @@ contains
        allocate ( target2source(nTags*nelem(3)) )
     endif
 
-    source2target(:)=0d0
-    target2source(:)=0d0
+    source2target(:)=0.0_RKIND
+    target2source(:)=0.0_RKIND
 
 #endif
 
@@ -1649,10 +1649,10 @@ contains
                 gatheredArray_source(nEdgesGlobal_source),&
                 globalArray_target(nEdgesGlobal_target),&
                 gatheredArray_target(nEdgesGlobal_target))
-       globalArray_source(:)=0d0
-       gatheredArray_source(:)=0d0
-       globalArray_target(:)=0d0
-       gatheredArray_target(:)=0d0
+       globalArray_source(:)=0.0_RKIND
+       gatheredArray_source(:)=0.0_RKIND
+       globalArray_target(:)=0.0_RKIND
+       gatheredArray_target(:)=0.0_RKIND
              
     else
        allocate(globalArray_source(1),&
@@ -1694,7 +1694,7 @@ contains
     endif
 
     ! scatter
-    localArray_target(:)=0d0
+    localArray_target(:)=0.0_RKIND
     call MPI_SCATTERV(gatheredArray_target,&
                       nEdgesPerProc_target,&
                       nEdgesDisplacement_target,&
@@ -1914,7 +1914,7 @@ contains
 
     ! we want edgeMask_btr to essentially be the same as edge mask but with boundary cells having
     ! values of 1 down to maxLevelCell
-    edgeMask_spatial_split_btr(:,:)=0d0
+    edgeMask_spatial_split_btr(:,:)=0.0_RKIND
 
     ! recreate edgeMask
     do iEdge=1,nEdgesAll
@@ -1945,7 +1945,7 @@ contains
 
     ! we want edgeMask_bc to have zeroes on all edges which are only part of boundary cells. This
     ! happens when at least one vertex of an edge has a value of nCellsAll+1 in cellsOnVertex
-    edgeMask_spatial_split_bc(:,:)=0d0
+    edgeMask_spatial_split_bc(:,:)=0.0_RKIND
 
     ! recreate edgeMask
     do iEdge=1,nEdgesAll
@@ -1958,13 +1958,13 @@ contains
        cell1=cellsOnEdge(1,iEdge)
        cell2=cellsOnEdge(2,iEdge)
        if ((isBoundaryCell(cell1).EQ.1).OR.(isBoundaryCell(cell2).EQ.1)) then
-          edgeMask_spatial_split_bc(:,iEdge)=0d0
+          edgeMask_spatial_split_bc(:,iEdge)=0.0_RKIND
        elseif ((isBoundaryCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
-          edgeMask_spatial_split_bc(:,iEdge)=0d0
+          edgeMask_spatial_split_bc(:,iEdge)=0.0_RKIND
        elseif ((isBoundaryCell(cell2).EQ.1).AND.(isSecondRowCell(cell1).EQ.1)) then
-          edgeMask_spatial_split_bc(:,iEdge)=0d0
+          edgeMask_spatial_split_bc(:,iEdge)=0.0_RKIND
        elseif ((isSecondRowCell(cell1).EQ.1).AND.(isSecondRowCell(cell2).EQ.1)) then
-          edgeMask_spatial_split_bc(:,iEdge)=0d0
+          edgeMask_spatial_split_bc(:,iEdge)=0.0_RKIND
        endif
     enddo
 

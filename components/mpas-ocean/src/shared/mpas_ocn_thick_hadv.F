@@ -108,7 +108,7 @@ contains
       !
       !-----------------------------------------------------------------
 
-      integer :: iEdge, k, i, iCell
+      integer :: iEdge, k, i, iCell, kmax, cell1, cell2
 
       real (kind=RKIND) :: flux, invAreaCell
 
@@ -140,7 +140,8 @@ contains
         invAreaCell = 1.0_RKIND / areaCell(iCell)
         do i = 1, nEdgesOnCell(iCell)
           iEdge = edgesOnCell(i, iCell)
-          do k = minLevelEdgeBot(iEdge), maxLevelEdgeTop(iEdge)
+          call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)
+          do k = minLevelEdgeBot(iEdge), kmax
             flux = normalVelocity(k, iEdge) * dvEdge(iEdge) * layerThickEdgeFlux(k, iEdge)
             tend(k, iCell) = tend(k, iCell) + edgeSignOnCell(i, iCell) * flux * invAreaCell
           end do

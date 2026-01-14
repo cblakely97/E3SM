@@ -2146,7 +2146,8 @@ contains
          nCells, nEdges,        &! number of cells, edges
          kmin, kmax,            &! min, max active vert level index
          eoe,                   &! index for edge on edge
-         edgeSignOnCell_temp     ! local tmp for sign across edge
+         edgeSignOnCell_temp,   & ! local tmp for sign across edge
+         cell1, cell2
 
       real(kind=RKIND) :: &
          invAreaCell1,      &! 1/cell area
@@ -2295,7 +2296,7 @@ contains
       do iEdge = 1, nEdges
          tangentialVelocity(:,iEdge) = 0.0_RKIND
          kmin = minLevelEdgeBot(iEdge)
-         kmax = maxLevelEdgeTop(iEdge)
+         call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)
          do i = 1, nEdgesOnEdge(iEdge)
             eoe = edgesOnEdge(i,iEdge)
             weightsOnEdge_temp = weightsOnEdge(i, iEdge)
@@ -2914,7 +2915,8 @@ contains
       integer :: &
          iEdge, iCell, k, i, &! edge, cell, vert, nbr indices
          nCells,             &! number of cells
-         kmin, kmax           ! min/max layer indices for active layers
+         kmin, kmax,         &! min/max layer indices for active layers
+         cell1, cell2
 
       real (kind=RKIND) :: &
          flux,         &!
@@ -2974,7 +2976,7 @@ contains
          do i = 1, nEdgesOnCell(iCell)
             iEdge = edgesOnCell(i, iCell)
             kmin = minLevelEdgeBot(iEdge)
-            kmax = maxLevelEdgeTop(iEdge)
+            call ocn_mesh_return_vertical_limits(iEdge,cell1,cell2,kmax)
 
             do k = kmin, kmax
                flux = layerThicknessEdgeFlux(k,iEdge)* &
