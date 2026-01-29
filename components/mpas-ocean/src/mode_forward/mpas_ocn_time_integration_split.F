@@ -978,6 +978,7 @@ module ocn_time_integration_split
  
                ! Use minimum of the two cell depths to be consistent with sum of layer thicknesses
                baroclinicThickness(iEdge)=MIN(bottomDepth(cell1),bottomDepth(cell2))
+               baroclinicThickness(iEdge)=0.5_RKIND*(bottomDepth(cell1)+bottomDepth(cell2))
             enddo
 
             ! if we are using additional barotropic terms calculate those here

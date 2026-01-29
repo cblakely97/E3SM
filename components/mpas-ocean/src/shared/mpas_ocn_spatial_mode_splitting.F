@@ -82,6 +82,7 @@ module ocn_spatial_mode_splitting
               ocn_spatial_mode_splitting_bc2btr_remapping,&
               ocn_spatial_mode_splitting_btr2bc_remapping,&
               ocn_spatial_mode_splitting_time_int_split_setup_btr,&
+              ocn_spatial_mode_splitting_bottomDepth_remapping,&
               ocn_spatial_mode_splitting_dmpar_init_bc,&
               ocn_spatial_mode_splitting_dmpar_init_btr,&
               ocn_spatial_mode_splitting_set_edgeMask_btr
@@ -150,6 +151,12 @@ module ocn_spatial_mode_splitting
                                                    barotropicThicknessFluxX_btr,&
                                                    barotropicThicknessFluxY_btr,&
                                                    barotropicThicknessFluxZ_btr
+
+   ! The following variables are for conservatively remapping the bathymetry from barotropic to
+   ! baroclinic domain.
+   character(:), allocatable :: bottomDepthTag,bottomDepthTag_btr
+   integer, dimension(2) :: bottomDepthIndex, bottomDepthType
+   character(:), allocatable :: bottomDepth_weights_identifier
 
    ! variables for setting edgeMask for the boundary between the baroclinic and barotropic domains
    integer, pointer :: nVertLevels_bc, nEdgesAll_bc
@@ -447,8 +454,17 @@ contains
                                                      bc2btrVar_btr,&
                                                      nTags)
 
-    ! destroy mesh structure (NOTE: THIS IS DONE IN update_vertical_grid EVENTUALLY)
-    call ocn_meshDestroy(iErr)
+    !--------------------------------------------------------------------
+    ! remap bottomDepth from barotropic to baroclinic domain
+    !--------------------------------------------------------------------
+
+    call ocn_spatial_mode_splitting_bottomDepth_remapping(domain)
+
+    !--------------------------------------------------------------------
+    ! update the vertical grid on the baroclinic domain
+    !--------------------------------------------------------------------
+
+    call ocn_spatial_mode_splitting_update_vertical_grid(domain)
 
 #endif
     !--------------------------------------------------------------------
@@ -771,6 +787,373 @@ contains
     !--------------------------------------------------------------------
 
     end subroutine ocn_spatial_mode_splitting_allocate_buffers!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_bottomDepth_remap
+!
+!> \brief   Remaps bottomDepth from barotropic to baroclinic domain
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  This routine conservatively remaps bottomDepth from the barotropic 
+!>  to baroclinic domain.
+!
+!-----------------------------------------------------------------------
+
+
+    subroutine ocn_spatial_mode_splitting_bottomDepth_remapping(domain)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain ! will alwas be barotropic
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+    ! domain pointer
+    type (domain_type), pointer :: domain_bc,domain_btr
+
+    ! configuration info
+    logical, pointer :: config_spatial_mode_splitting
+
+    ! pool pointers
+    type (block_type), pointer :: block_ptr
+    type (mpas_pool_type), pointer :: meshPool
+
+    ! number of cells on each mesh
+    integer, pointer :: nCellsSolve_btr, nCellsSolve_bc
+
+    ! arrays for storing data
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc,&
+                                                bottomDepth_btr
+
+    ! buffer for sending the data
+    real (kind=RKIND), dimension(:), allocatable :: buffer_btr2bc, buffer_bc2btr
+    real (kind=RKIND), dimension(:), allocatable :: buffer_btr2bc_btr, buffer_bc2btr_btr
+
+    ! other parameters moab needs
+    integer :: totalNumVals, entity_type
+
+    ! for loops
+    integer :: iCell
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    !--------------------------------------------------------------------
+    ! add bottomDepth to MOAB
+    !--------------------------------------------------------------------
+
+    ! set filter type (no filter)
+    filter_type=0
+
+    ! create weights for remapping bottomDepth
+    bottomDepth_weights_identifier='bottomDepthWeights'//C_NULL_CHAR
+    fv_method=''//C_NULL_CHAR
+    call ocn_spatial_mode_splitting_calc_weights(btrXbcPID,&
+                                                 bottomDepth_weights_identifier,&
+                                                 fv_method)
+
+    ! define tags for bottomDepth
+    bottomDepthTag='bottomDepth_bc'//C_NULL_CHAR
+    bottomDepthTag_btr='bottomDepth_btr'//C_NULL_CHAR
+    bottomDepthType(:)=1
+    call ocn_spatial_mode_splitting_define_tags(btrPID,&
+                                                bcPID,&
+                                                bottomDepthTag_btr,&
+                                                bottomDepthTag,&
+                                                bottomDepthType,&
+                                                bottomDepthIndex)
+
+    ! allocate our buffers
+    call ocn_spatial_mode_splitting_allocate_buffers(btrPID,&
+                                                     buffer_btr2bc_btr,&
+                                                     buffer_bc2btr_btr,&
+                                                     1)
+    call ocn_spatial_mode_splitting_allocate_buffers(bcPID,&
+                                                     buffer_btr2bc,&
+                                                     buffer_bc2btr,&
+                                                     1)
+
+    !--------------------------------------------------------------------
+    ! remap bottomDepth from barotropic to baroclinic domains
+    !--------------------------------------------------------------------
+
+    ! get bottomDepth array from baroclinic domain
+    domain_bc => domain % core % domainlist
+    block_ptr => domain_bc % blocklist
+    do while(associated(block_ptr))
+
+       ! setup pools
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       ! get nCells
+       call mpas_pool_get_dimension(meshPool,'nCellsSolve',nCellsSolve_bc)
+
+       ! get bottomDepth from baroclinic domain
+       call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_bc)
+
+       block_ptr => block_ptr % next
+    end do 
+
+    ! get bottomDepth array on barotropic domain
+    domain_btr => domain_bc % next
+    block_ptr => domain_btr % blocklist
+    do while(associated(block_ptr))
+
+       ! setup pools
+       call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+
+       ! get nCells
+       call mpas_pool_get_dimension(meshPool,'nCellsSolve',nCellsSolve_btr)
+
+       ! get bottomDepth from baroclinic domain
+       call mpas_pool_get_array(meshPool,'bottomDepth',bottomDepth_btr)
+
+       block_ptr => block_ptr % next
+    end do 
+
+    ! remap bathymetry
+    buffer_btr2bc_btr(:)=0d0
+    do iCell = 1,nCellsSolve_btr
+      buffer_btr2bc_btr(iCell)=bottomDepth_btr(iCell)
+    enddo
+
+    totalNumVals=nCellsSolve_btr
+    entity_type=1
+    call ocn_spatial_mode_splitting_remap_data(btrPID,&
+                                               bcPID,&
+                                               btrXbcPID,&
+                                               btrGID,&
+                                               bcGID,&
+                                               btrXbcGID,&
+                                               bottomDepthTag_btr,&
+                                               bottomDepthTag,&
+                                               totalNumVals,&
+                                               entity_type,&
+                                               buffer_btr2bc_btr,&
+                                               bottomDepth_weights_identifier)
+
+    ! store remapped bathymetry in bottomDepth_bc
+    bottomDepth_bc(:)=-9999d0
+    totalNumVals=nCellsSolve_bc
+    entity_type=1
+    ierr = iMOAB_GetDoubleTagStorage(bcPID,&
+                                     bottomDepthTag,&
+                                     totalNumVals,&
+                                     entity_type,&
+                                     buffer_btr2bc)
+    call errorout(ierr,'failed to get bottomDepth_bc')
+
+    do iCell = 1,nCellsSolve_bc
+       bottomDepth_bc(iCell)=buffer_btr2bc(iCell)
+    enddo
+
+    ! halo exchange new bathy
+    call mpas_dmpar_field_halo_exch(domain_bc,'bottomDepth')
+
+    deallocate(buffer_btr2bc_btr,buffer_bc2btr_btr,buffer_btr2bc,buffer_bc2btr)
+
+#endif
+    end subroutine ocn_spatial_mode_splitting_bottomDepth_remapping!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_update_vertical_grid
+!
+!> \brief   Updates vertical grid following remapping of bathymetry
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!>  This routine updates the vertical grid following conservative remap-
+!>  ping of bathymetry
+!
+!-----------------------------------------------------------------------
+
+
+    subroutine ocn_spatial_mode_splitting_update_vertical_grid(domain)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+    type(domain_type), intent(inout) :: domain
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+    ! domain pointer
+    type (domain_type), pointer :: domain_bc
+
+    ! block pointer
+    type (block_type), pointer :: block_ptr
+
+    ! pools
+    type(mpas_pool_type), pointer :: meshPool, verticalMeshPool, statePool
+
+    ! dimensions
+    integer, pointer :: nCellsSolve_bc, nEdgesSolve_bc
+    integer, pointer :: nVertLevels_bc
+
+    ! variable pointers from mesh pool
+    integer, dimension(:), pointer :: minLevelCell_bc, maxLevelCell_bc
+    real (kind=RKIND), dimension(:), pointer :: bottomDepth_bc
+    real (kind=RKIND), dimension(:), pointer :: refBottomDepth_bc
+
+    ! variable pointers from verticalMesh pool
+    real (kind=RKIND), dimension(:,:), pointer :: restingThickness_bc
+
+    ! variable pointers from state pool
+    real (kind=RKIND), dimension(:,:), pointer :: layerThickness_bc
+    real (kind=RKIND), dimension(:,:), pointer :: normalVelocity_bc
+    real (kind=RKIND), dimension(:), pointer :: ssh_bc
+
+    ! for resetting the 
+
+    ! local work variables
+    real (kind=RKIND) :: maxBottomDepth, minBottomDepth, wc_thickness, delta_z
+    integer :: idz
+
+    ! for loops
+    integer :: iCell, iEdge, iVertex, iVertLevel, kk
+
+    ! error handling
+    integer :: ierr
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! ensure we are on the baroclinic domain
+    domain_bc => domain % core % domainlist
+    block_ptr => domain_bc % blocklist
+    do while(associated(block_ptr))
+
+      ! get pools
+      call mpas_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'verticalMesh', verticalMeshPool)
+      call mpas_pool_get_subpool(block_ptr % structs, 'state', statePool)
+
+      ! get dimensions
+      call mpas_pool_get_dimension(meshPool, 'nVertLevels', nVertLevels_bc)
+      call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve_bc)
+      call mpas_pool_get_dimension(meshPool, 'nEdgesSolve', nEdgesSolve_bc)
+
+      ! get mesh pool variables
+      call mpas_pool_get_array(meshPool, 'minLevelCell', minLevelCell_bc)
+      call mpas_pool_get_array(meshPool, 'maxLevelCell', maxLevelCell_bc)
+      call mpas_pool_get_array(meshPool, 'bottomDepth', bottomDepth_bc)
+      call mpas_pool_get_array(meshPool, 'refBottomDepth', refBottomDepth_bc)
+
+      ! get verticalMesh pool variables
+      call mpas_pool_get_array(verticalMeshPool, 'restingThickness', restingThickness_bc)
+      
+      ! get state pool variables
+      call mpas_pool_get_array(statePool, 'layerThickness', layerThickness_bc, 1)
+      call mpas_pool_get_array(statePool, 'normalVelocity', normalVelocity_bc, 1)
+      call mpas_pool_get_array(statePool, 'ssh', ssh_bc, 1)
+
+      ! get new maximum bottomDepth and make sure it matches refBottomDepth. By this I mean that we
+      ! need refBottomDepth_bc(n-1) to be greater than or equal to the maximum bottom depth
+      maxBottomDepth=MAXVAL(bottomDepth_bc)
+      if (maxBottomDepth .GT. refBottomDepth_bc(nVertLevels_bc)) then
+         !call mpas_log_write('new max(bottomDepth) > refBotomDepth(nVertLevels)',MPAS_LOG_CRIT)
+      endif
+
+      ! loop over each cell and update as needed
+      do iCell = 1,nCellsSolve_bc
+
+         ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
+         ! sum(layerThickness) should equal bottomDepth+ssh
+
+         ! find the sum of the restingThickness_bces
+         wc_thickness = restingThickness_bc(minLevelCell_bc(iCell),iCell)
+         do iVertLevel = minLevelCell_bc(iCell)+1,maxLevelCell_bc(iCell)
+            wc_thickness = wc_thickness + restingThickness_bc(iVertLevel,iCell)
+         end do
+
+         ! check if the sum of the layer thicknesses is consistent with the bottom depth
+         if ( wc_thickness .eq. bottomDepth_bc(iCell) ) then
+            cycle
+         end if
+
+         ! if we are inconsistent, then we need to adjust. First, calculate the max and min bottom
+         ! depths we allow for this layer (+/- 50% of refZMid)
+
+         ! find which level our bottom depth resides in
+         ! NOTE: because I do this, we will only ever need to remove a layer. Adding a layer will
+         ! never be required
+         do iVertLevel = 1,nVertLevels_bc
+            if ( refBottomDepth_bc(iVertLevel) .GE. bottomDepth_bc(iCell) ) then
+               idz = iVertLevel
+               exit
+            end if
+         end do
+
+         ! find min depth (refBottomDepth_bc - 50% of layer thickness)
+         if (idz.eq.1) then
+            call mpas_log_write('we should fail here',MPAS_LOG_CRIT)
+         endif
+         minBottomDepth = 0.5d0 * ( refBottomDepth_bc(idz-1) + refBottomDepth_bc(idz) )
+
+         ! if bottomDepth_bc <= minBottomDepth, subtract a layer
+         if ( bottomDepth_bc(iCell) .LT. minBottomDepth ) then
+            idz = idz - 1
+         end if
+
+         maxLevelCell_bc(iCell)=idz
+
+         ! find the sum of the restingThickness_bces
+         wc_thickness = restingThickness_bc(minLevelCell_bc(iCell),iCell)
+         do iVertLevel = minLevelCell_bc(iCell)+1,maxLevelCell_bc(iCell)
+            wc_thickness = wc_thickness + restingThickness_bc(iVertLevel,iCell)
+         end do
+
+         delta_z = wc_thickness - bottomDepth_bc(iCell)
+         restingThickness_bc(idz,iCell) = restingThickness_bc(idz,iCell) - delta_z
+
+         ! TODO: figure out what to do when we aren't starting from a cold start (i.e.,
+         ! sum(layerThickness) should equal bottomDepth_bc+ssh
+         do iVertLevel = 1,nVertLevels_bc
+            layerThickness_bc(iVertLevel,iCell) = restingThickness_bc(iVertLevel,iCell)
+            normalVelocity_bc(iVertLevel,iCell) = 0d0
+         end do
+
+      end do
+
+      ! perform halo exchange for maxLevelCell
+      call mpas_dmpar_field_halo_exch(domain_bc,'maxLevelCell')
+      call mpas_dmpar_field_halo_exch(domain_bc,'restingThickness')
+      call mpas_dmpar_field_halo_exch(domain_bc,'layerThickness',timeLevel=1)
+      call mpas_dmpar_field_halo_exch(domain_bc,'normalVelocity',timeLevel=1)
+
+      ! call meshDestroy (will be recreated in the init routines)
+      call ocn_meshDestroy(ierr)
+
+      block_ptr => block_ptr % next
+    end do
+
+#endif
+    end subroutine ocn_spatial_mode_splitting_update_vertical_grid!}}}
+
+
 !***********************************************************************
 !
 !  routine ocn_spatial_mode_splitting_bc2btr_remapping
@@ -1142,6 +1525,120 @@ contains
     enddo
 #endif
     end subroutine ocn_spatial_mode_splitting_btr2bc_remapping!}}}
+
+!***********************************************************************
+!
+!  routine ocn_spatial_mode_splitting_remap_data
+!
+!> \brief   
+!> \author  Coleman Blakely
+!> \date    April 2024
+!> \details
+!
+!-----------------------------------------------------------------------
+    subroutine ocn_spatial_mode_splitting_remap_data(sourcePID,&
+                                                     targetPID,&
+                                                     overlapPID,&
+                                                     sourceGID,&
+                                                     targetGID,&
+                                                     overlapGID,&
+                                                     fieldTags,&
+                                                     fieldTagsProjected,&
+                                                     totalNumVals,&
+                                                     entity_type,&
+                                                     buffer,&
+                                                     weights_identifier)!{{{
+
+    !-----------------------------------------------------------------
+    ! input variables
+    !-----------------------------------------------------------------
+
+    ! moab pids
+    integer,intent(inout) :: sourcePID,&
+                             targetPID,&
+                             overlapPID
+
+    ! moab global id's
+    integer,intent(inout) :: sourceGID,&
+                             targetGID,&
+                             overlapGID
+
+    ! names of fields
+    character(:),allocatable,intent(inout) :: fieldTags,fieldTagsProjected
+
+    ! data for moab
+    integer,intent(inout) :: totalNumVals ! number of values being sent, e.g., 
+                                       ! 2*nCells for barotropicForcing
+                                       ! (zonal and meridional components)
+    integer,intent(inout) :: entity_type  ! 0 for vertex, 1 for element, (2 for edge?)
+
+    ! data being projected
+    real (kind=RKIND),dimension(:),intent(inout) :: buffer
+
+    ! what weights we are using
+    character(:),allocatable,intent(inout) :: weights_identifier
+
+    !-----------------------------------------------------------------
+    ! output variables
+    !-----------------------------------------------------------------
+
+    !-----------------------------------------------------------------
+    ! local variables
+    !-----------------------------------------------------------------
+
+    ! imoab filter type (we use no filter)
+    integer :: filter_type
+
+    ! error handling
+    integer :: ierr
+
+    ! filename
+    character(:),allocatable :: filename
+
+    ! End preamble
+    !-----------------------------------------------------------------
+    ! Begin code
+
+#ifdef HAVE_MOAB
+
+    ! set filter type
+    filter_type=0
+
+    ierr=iMOAB_SetDoubleTagStorage(sourcePID,&
+                                   fieldTags,&
+                                   totalNumVals,&
+                                   entity_type,&
+                                   buffer)
+    call errorout(ierr,'unable to set storage on source')
+
+    ! send to target "side"
+    ierr=iMOAB_SendElementTag(sourcePID,&
+                              fieldTags,&
+                              moabComm,&
+                              overlapGID)
+    call errorout(ierr,'unable to send data from source "side" to target "side"')
+
+    ierr=iMOAB_ReceiveElementTag(overlapPID,&
+                                 fieldTags,&
+                                 moabComm,&
+                                 sourceGID)
+    call errorout(ierr,'unable to receive data on target "side"')
+
+    ierr=iMOAB_FreeSenderBuffers(sourcePID,overlapGID)
+    call errorout(ierr,"unable to free sender buffers")
+
+    ierr=iMOAB_ApplyScalarProjectionWeights(overlapPID,&
+                                            filter_type,&
+                                            weights_identifier,&
+                                            fieldTags,&
+                                            fieldTagsProjected)
+    call errorout(ierr,'unable to reproject :(')
+
+#endif
+
+    !--------------------------------------------------------------------
+
+    end subroutine ocn_spatial_mode_splitting_remap_data!}}}
 
 !***********************************************************************
 !
@@ -1918,30 +2415,37 @@ contains
 
     ! recreate edgeMask
     do iEdge=1,nEdgesAll
-       do k=minLevelEdgeTop(iEdge),maxLevelEdgeTop(iEdge)
+       cell1=cellsOnEdge(1,iEdge)
+       cell2=cellsOnEdge(2,iEdge)
+       kmax=maxLevelEdgeTop(iEdge)
+       if (cell2.EQ.nCellsAll+1) then
+          kmax=maxLevelCell(cell1)
+       endif
+
+       do k=minLevelEdgeTop(iEdge),kmax
           edgeMask_spatial_split_btr(k,iEdge)=1d0
        enddo
     enddo
 
-    ! check boundary cells and fill them out
-    do iCell=1,nCellsAll
-       if (isBoundaryCell(iCell).EQ.1) then
-          ! identify kmax 
-          kmax=maxLevelCell(iCell)
-          do k=1,maxEdges
-             cell1=cellsOnCell(k,iCell)
-             if (maxLevelCell(cell1).EQ.0) then
-                cycle
-             endif
-             kmax=MIN(kmax,maxLevelCell(cell1))
-          enddo
-          do iEdge=1,nEdgesOnCell(iCell)
-             do k=1,kmax
-                edgeMask_spatial_split_btr(k,edgesOnCell(iEdge,iCell))=1d0
-             enddo
-          enddo
-       endif
-    enddo
+!    ! check boundary cells and fill them out
+!    do iCell=1,nCellsAll
+!       if (isBoundaryCell(iCell).EQ.1) then
+!          ! identify kmax 
+!          kmax=maxLevelCell(iCell)
+!          do k=1,maxEdges
+!             cell1=cellsOnCell(k,iCell)
+!             if (maxLevelCell(cell1).EQ.0) then
+!                cycle
+!             endif
+!             kmax=MIN(kmax,maxLevelCell(cell1))
+!          enddo
+!          do iEdge=1,nEdgesOnCell(iCell)
+!             do k=1,kmax
+!                edgeMask_spatial_split_btr(k,edgesOnCell(iEdge,iCell))=1d0
+!             enddo
+!          enddo
+!       endif
+!    enddo
 
     ! we want edgeMask_bc to have zeroes on all edges which are only part of boundary cells. This
     ! happens when at least one vertex of an edge has a value of nCellsAll+1 in cellsOnVertex

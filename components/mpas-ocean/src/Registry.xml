@@ -2555,19 +2555,19 @@
 		/>
 		<var name="minLevelVertexTop" type="integer" dimensions="nVertices"
 			 description="Index to the first vertex in a column with at least one active ocean cell around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelVertexTop" type="integer" dimensions="nVertices"
 			 description="Index to the last vertex in a column with all active cells around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="minLevelVertexBot" type="integer" dimensions="nVertices"
 			 description="Index to the first vertex in a column with all active cells around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="maxLevelVertexBot" type="integer" dimensions="nVertices"
 			 description="Index to the last vertex in a column with at least one active ocean cell around it."
-			 packages="forwardMode;analysisMode"
+			 packages="initMode;forwardMode;analysisMode"
 		/>
 		<var name="refBottomDepth" type="real" dimensions="nVertLevels" units="m"
 			 description="Reference depth of ocean for each vertical level. Used in 'z-level' type runs."
