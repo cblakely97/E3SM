@@ -67,6 +67,7 @@ module ocn_tendency
    use ocn_wetting_drying
    use ocn_vel_tidal_potential
    use ocn_vel_self_attraction_loading
+   use ocn_gofs_coupling
    use ocn_manufactured_solution
 
    implicit none
@@ -464,6 +465,9 @@ contains
                                indxTemp, indxSalt, activeTracers, &
                                thermExpCoeff, salineContractCoeff, &
                                tendVel, err)
+
+      ! Add GOFS external pressure gradient forcing
+      call ocn_gofs_coupling_tend_pgrad(ssh, tendVel, err)
 
       ! Compute pgf additions due to self-attraction and loading
       if(mpas_is_alarm_ringing(domain % clock, 'salComputeAlarm', ierr=err)) then 

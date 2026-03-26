@@ -131,6 +131,7 @@ module ocn_core_interface
       logical, pointer :: tidalPotentialForcingPKGActive
       logical, pointer :: vegetationDragPKGActive
       logical, pointer :: topographicWaveDragPKGActive
+      logical, pointer :: gofsCouplingPKGActive
       logical, pointer :: inSituEOSActive
       logical, pointer :: variableShortwaveActive
       logical, pointer :: gmActive
@@ -168,6 +169,7 @@ module ocn_core_interface
       logical, pointer :: config_use_self_attraction_loading
       logical, pointer :: config_use_tidal_potential_forcing
       logical, pointer :: config_use_topographic_wave_drag
+      logical, pointer :: config_use_gofs_coupling
       logical, pointer :: config_use_GM
       logical, pointer :: config_submesoscale_enable
       logical, pointer :: config_use_Redi
@@ -389,6 +391,15 @@ module ocn_core_interface
       call mpas_pool_get_config(configPool, 'config_use_topographic_wave_drag', config_use_topographic_wave_drag)
       if (config_use_topographic_wave_drag) then
          topographicWaveDragPKGActive = .true.
+      end if
+
+      !
+      ! test for use of GOFS coupling, gofsCouplingPKG
+      !
+      call mpas_pool_get_package(packagePool, 'gofsCouplingPKGActive', gofsCouplingPKGActive)
+      call mpas_pool_get_config(configPool, 'config_use_gofs_coupling', config_use_gofs_coupling)
+      if (config_use_gofs_coupling) then
+         gofsCouplingPKGActive = .true.
       end if
 
       !

@@ -44,6 +44,7 @@ module ocn_time_integration_rk4
    use ocn_surface_land_ice_fluxes
    use ocn_transport_tests
    use ocn_time_varying_forcing
+   use ocn_gofs_coupling
 
    use ocn_subgrid
 
@@ -140,6 +141,7 @@ module ocn_time_integration_rk4
       real (kind=RKIND), pointer :: config_mom_del4
       real (kind=RKIND), pointer :: config_drying_min_cell_height
       logical, pointer :: config_use_wetting_drying
+      logical, pointer :: config_use_gofs_coupling
       logical, pointer :: config_verify_not_dry
       logical, pointer :: config_prevent_drying
       logical, pointer :: config_zero_drying_velocity
@@ -222,6 +224,7 @@ module ocn_time_integration_rk4
       call mpas_pool_get_config(domain % configs, 'config_zero_drying_velocity', config_zero_drying_velocity)
       call mpas_pool_get_config(domain % configs, 'config_use_tidal_forcing', config_use_tidal_forcing)
       call mpas_pool_get_config(domain % configs, 'config_tidal_forcing_type', config_tidal_forcing_type)
+      call mpas_pool_get_config(domain % configs, 'config_use_gofs_coupling', config_use_gofs_coupling)
 
       !
       ! Initialize time_levs(2) with state at current time
@@ -374,6 +377,20 @@ module ocn_time_integration_rk4
       forcingTimeIncrementRK4(3) = dt/2.0_RKIND
       forcingTimeIncrementRK4(4) = dt
 
+      ! Compute GOFS lowpass-filtered and tidal velocities
+      ! (constant across RK substeps)
+      if (config_use_gofs_coupling) then
+         block => domain % blocklist
+         do while (associated(block))
+            call mpas_pool_get_subpool(block % structs, 'state', statePool)
+            call mpas_pool_get_array(statePool, 'normalVelocity', &
+                                     normalVelocityCur, 1)
+            call ocn_gofs_coupling_compute_lowpass( &
+                 normalVelocityCur, layerThickEdgeMean, err)
+            block => block % next
+         end do
+      end if
+
       call mpas_timer_start("RK4-main loop")
 
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -503,6 +520,11 @@ module ocn_time_integration_rk4
 
         call ocn_time_varying_forcing_get(domain % streamManager, domain, domain % clock)
 
+        ! Update GOFS time-varying forcing (interpolation)
+        if (config_use_gofs_coupling) then
+           call ocn_gofs_coupling_get_forcing(domain % streamManager, domain)
+        end if
+
         block => domain % blocklist
         do while (associated(block))
            call ocn_time_integrator_rk4_compute_vel_tends(domain, block, dt, rk_substep_weights(rk_step), domain % dminfo, err )
@@ -598,6 +620,19 @@ module ocn_time_integration_rk4
       end if
 
       call mpas_timer_stop("RK4-main loop")
+
+      ! Update GOFS 25-hour filter buffer with new state
+      if (config_use_gofs_coupling) then
+         block => domain % blocklist
+         do while (associated(block))
+            call mpas_pool_get_subpool(block % structs, 'state', statePool)
+            call mpas_pool_get_array(statePool, 'normalVelocity', &
+                                     normalVelocityNew, 2)
+            call ocn_gofs_coupling_update_filter( &
+                 normalVelocityNew, layerThickEdgeMean, err)
+            block => block % next
+         end do
+      end if
 
       !
       !  A little clean up at the end: rescale tracer fields and compute diagnostics for new state

@@ -76,7 +76,18 @@ module ocn_diagnostics_variables
    real (kind=RKIND), dimension(:), pointer :: temp_twd
    real (kind=RKIND), dimension(:), pointer :: normalCoeffTWD 
    real (kind=RKIND), dimension(:), pointer :: tangentialCoeffTWD 
-   real (kind=RKIND), dimension(:), pointer :: topographicWaveDrag 
+   real (kind=RKIND), dimension(:), pointer :: topographicWaveDrag
+
+   ! GOFS coupling runtime/diagnostic variables
+   real (kind=RKIND), dimension(:), pointer :: gofsExternalPGrad
+   real (kind=RKIND), dimension(:), pointer :: gofsTidalDragTend
+   real (kind=RKIND), dimension(:), pointer :: gofsBarotropicVelocity
+   real (kind=RKIND), dimension(:), pointer :: gofsLowpassVelocity
+   real (kind=RKIND), dimension(:), pointer :: gofsTidalVelocity
+   real (kind=RKIND), dimension(:,:), pointer :: gofsFilterBuffer
+   integer, pointer :: gofsFilterIndex
+   integer, pointer :: gofsFilterCount
+   integer, pointer :: gofsFilterStepCounter
 
    real (kind=RKIND), dimension(:,:), pointer :: tracersSurfaceValue
    real (kind=RKIND), dimension(:,:), pointer :: tracersSurfaceLayerValue
@@ -440,6 +451,26 @@ contains
          call mpas_pool_get_array(diagnosticsPool, &
                   'topographicWaveDrag', &
                    topographicWaveDrag)
+      end if
+      if (config_use_gofs_coupling) then
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsExternalPGrad', gofsExternalPGrad)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsTidalDragTend', gofsTidalDragTend)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsBarotropicVelocity', gofsBarotropicVelocity)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsLowpassVelocity', gofsLowpassVelocity)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsTidalVelocity', gofsTidalVelocity)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsFilterBuffer', gofsFilterBuffer)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsFilterIndex', gofsFilterIndex)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsFilterCount', gofsFilterCount)
+         call mpas_pool_get_array(diagnosticsPool, &
+                  'gofsFilterStepCounter', gofsFilterStepCounter)
       end if
       if ( trim(config_ocean_run_mode) == 'init' .or. &
                 config_AM_debugDiagnostics_enable ) then
@@ -1382,6 +1413,11 @@ contains
          nullify(normalCoeffTWD)
          nullify(tangentialCoeffTWD)
          nullify(topographicWaveDrag)
+      end if
+      if (config_use_gofs_coupling) then
+         nullify(gofsExternalPGrad, gofsTidalDragTend)
+         nullify(gofsBarotropicVelocity, gofsLowpassVelocity, gofsTidalVelocity)
+         nullify(gofsFilterBuffer, gofsFilterIndex, gofsFilterCount, gofsFilterStepCounter)
       end if
       if ( trim(config_time_integrator) == 'split_implicit' ) then
          nullify(SIvec_r0,              &

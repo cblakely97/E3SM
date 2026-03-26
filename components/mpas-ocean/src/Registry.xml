@@ -119,6 +119,9 @@
 		<dim name="nGlcZLevels" definition="namelist:config_n_glc_z_levels"
                         description="The number of z-levels to use for passing ocean properties to GLC for indirect ice-sheet/ocean coupling"
 		/>
+		<dim name="nGofsFilterSamples" definition="namelist:config_gofs_filter_nsamples"
+                        description="Number of samples in the GOFS coupling 25-hour filter circular buffer"
+		/>
 	</dims>
 
 	<!--*************************************-->
@@ -1225,6 +1228,49 @@
 					possible_values="any positive real"
 		/>
 	</nml_record>
+	<nml_record name="gofs_coupling" mode="forward">
+		<nml_option name="config_use_gofs_coupling" type="logical" default_value=".false."
+					description="Enable GOFS3.1 one-way coupling (external PG forcing + internal tide drag)"
+					possible_values=".true. or .false."
+		/>
+		<nml_option name="config_gofs_tidal_drag_coeff" type="real" default_value="1.0" units="unitless"
+					description="Tuning multiplier for the GOFS internal tide drag coefficient"
+					possible_values="any positive real"
+		/>
+		<nml_option name="config_gofs_filter_interval" type="integer" default_value="10" units="timesteps"
+					description="Sub-sampling interval for the 25-hour boxcar filter"
+					possible_values="any positive integer"
+		/>
+		<nml_option name="config_gofs_filter_nsamples" type="integer" default_value="50" units="unitless"
+					description="Number of samples in the circular buffer. Filter window = interval * nsamples * dt"
+					possible_values="any positive integer"
+		/>
+		<nml_option name="config_gofs_forcing_start_time" type="character"
+					default_value="0001-01-01_00:00:00"
+					description="Start time for GOFS forcing data"
+					possible_values="Any date-time string"
+		/>
+		<nml_option name="config_gofs_forcing_reference_time" type="character"
+					default_value="0001-01-01_00:00:00"
+					description="Reference time for GOFS forcing interpolation"
+					possible_values="Any date-time string"
+		/>
+		<nml_option name="config_gofs_forcing_cycle_start" type="character"
+					default_value="0001-01-01_00:00:00"
+					description="Cycle start for repeating GOFS forcing"
+					possible_values="Any date-time string"
+		/>
+		<nml_option name="config_gofs_forcing_cycle_duration" type="character"
+					default_value="1000-00-00_00:00:00"
+					description="Cycle duration for repeating GOFS forcing"
+					possible_values="Any date-time string"
+		/>
+		<nml_option name="config_gofs_forcing_interval" type="character"
+					default_value="0000-01-00_00:00:00"
+					description="Time interval between GOFS forcing samples in input file"
+					possible_values="Any interval string"
+		/>
+	</nml_record>
 	<nml_record name="Rayleigh_damping" mode="forward">
 		<nml_option name="config_Rayleigh_damping_coeff" type="real" default_value="1.0e-4" units="s^-1"
 					description="Inverse-time coefficient for the Rayleigh damping term, $c_R$, applied at every depth level."
@@ -1758,6 +1804,7 @@
 		<package name="submeso" description="This package is for submesoscale eddy (MLE) variables, needed at resolutions greater than O(1km)"/>
 		<package name="tidalPotentialForcingPKG" description="This package controls variables required for tidal potential forcing"/>
 		<package name="topographicWaveDragPKG" description="This package controls variables required for topographic wave drag"/>
+		<package name="gofsCouplingPKG" description="Variables for GOFS3.1 one-way coupling"/>
 		<package name="gotmPKG" description="This package is for GOTM variables, which are only needed when using GOTM for the vertical turbulence closure."/>
 		<package name="verticalRemapPKG" description="This package is for variables required for vertical Lagrangian remapping."/>
 		<package name="activeWavePKG" description="This package controls variables required for wave coupling"/>
@@ -2095,6 +2142,10 @@
             <var name="totalRemovedIceRunoffHistory" packages="scaledDISMFPKG"/>
             <var name="nValidTotalRemovedIceRunoffHistory" packages="scaledDISMFPKG"/>
             <var name="runningMeanRemovedIceRunoff" packages="scaledDISMFPKG"/>
+            <var name="gofsFilterBuffer" packages="gofsCouplingPKG"/>
+            <var name="gofsFilterIndex" packages="gofsCouplingPKG"/>
+            <var name="gofsFilterCount" packages="gofsCouplingPKG"/>
+            <var name="gofsFilterStepCounter" packages="gofsCouplingPKG"/>
 		</stream>
 
 		<stream name="output"
@@ -2403,6 +2454,18 @@
 			<var name="bed_slope_edges"/>
 			<var name="lonGradEdge"/>
 			<var name="latGradEdge"/>
+		</stream>
+
+		<stream name="gofs_coupling"
+			type="input"
+			input_interval="none"
+			filename_template="gofs_coupling.nc"
+			packages="gofsCouplingPKG"
+			immutable="true"
+			mode="forward;analysis">
+			<var name="gofsBaroclinicPGrad"/>
+			<var name="gofsSurfaceDensity"/>
+			<var name="gofsInternalTideDragCoeff"/>
 		</stream>
 
 	</streams>
@@ -3470,6 +3533,43 @@
 			description="Zonal gradient of bathymetry"
 			packages="topographicWaveDragPKG"
 		/>
+		<!-- GOFS coupling runtime/diagnostic fields -->
+		<var name="gofsExternalPGrad" type="real" dimensions="nEdges" units="m s^-2"
+			description="Total external PG from GOFS coupling (diagnostic)"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsTidalDragTend" type="real" dimensions="nEdges" units="m s^-2"
+			description="Tendency from GOFS tidal drag (diagnostic)"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsBarotropicVelocity" type="real" dimensions="nEdges" units="m s^-1"
+			description="Barotropic velocity at edges"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsLowpassVelocity" type="real" dimensions="nEdges" units="m s^-1"
+			description="25-hour lowpass filtered barotropic velocity"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsTidalVelocity" type="real" dimensions="nEdges" units="m s^-1"
+			description="Tidal velocity = barotropic - lowpass"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsFilterBuffer" type="real" dimensions="nGofsFilterSamples nEdges" units="m s^-1"
+			description="Circular buffer for sub-sampled barotropic velocity"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsFilterIndex" type="integer" dimensions="" units="unitless"
+			description="Current write index in circular buffer (1-based)"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsFilterCount" type="integer" dimensions="" units="unitless"
+			description="Number of valid samples in buffer"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsFilterStepCounter" type="integer" dimensions="" units="unitless"
+			description="Steps since last sample was stored"
+			packages="gofsCouplingPKG"
+		/>
 		<!-- diagnostic fields for land-ice fluxes -->
 		<var name="landIceDraftForSsh" type="real" dimensions="nCells Time" units="m"
 			description="The elevation of the interface between land ice and the ocean that is used to correct the SSH gradient passed to MPAS-SeaIce and may be used for wetting-and-drying."
@@ -4264,6 +4364,19 @@
 		<var name="landIceDraftForcing" type="real" dimensions="nCells Time" units="m"
 			description="The elevation of the interface between land ice and the ocean."
 			packages="timeVaryingLandIceForcingPKG"
+		/>
+		<!-- GOFS coupling input fields (time-varying, read via mpas_forcing framework) -->
+		<var name="gofsBaroclinicPGrad" type="real" dimensions="nEdges Time" units="m s^-2"
+			description="Depth-integrated baroclinic PG from GOFS3.1, normal component at edges"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsSurfaceDensity" type="real" dimensions="nCells Time" units="kg m^-3"
+			description="Surface density from GOFS3.1 at cell centers"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsInternalTideDragCoeff" type="real" dimensions="nEdges Time" units="s^-1"
+			description="Internal tide drag coefficient from GOFS3.1 at edges"
+			packages="gofsCouplingPKG"
 		/>
 	</var_struct>
 	<var_struct name="scratch" time_levs="1">

@@ -63,6 +63,7 @@ module ocn_forward_mode
    use ocn_tidal_forcing
    use ocn_vel_tidal_potential
    use ocn_vel_self_attraction_loading
+   use ocn_gofs_coupling
 
    use ocn_tracer_hmix
    use ocn_tracer_hmix_redi
@@ -666,6 +667,9 @@ module ocn_forward_mode
 
       ! initialize time-varying forcing
       call ocn_time_varying_forcing_init(domain)
+
+      ! Initialize GOFS coupling time-varying forcing
+      call ocn_gofs_coupling_forcing_init(domain)
 
       ! if not using RK4, calculate time varying forcing terms once per
       ! time-step as opposed at each RK substage as implemented in RK4 
