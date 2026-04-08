@@ -1261,14 +1261,22 @@
 					possible_values="Any date-time string"
 		/>
 		<nml_option name="config_gofs_forcing_cycle_duration" type="character"
-					default_value="1000-00-00_00:00:00"
+					default_value="2-00-00_00:00:00"
 					description="Cycle duration for repeating GOFS forcing"
 					possible_values="Any date-time string"
 		/>
 		<nml_option name="config_gofs_forcing_interval" type="character"
-					default_value="0000-01-00_00:00:00"
+					default_value="01:00:00"
 					description="Time interval between GOFS forcing samples in input file"
 					possible_values="Any interval string"
+		/>
+		<nml_option name="config_gofs_forcing_ramp" type="real" default_value="10.0" units="days"
+					description="Number of days to ramp up GOFS coupling forcing (tanh profile)"
+					possible_values="Any positive real number"
+		/>
+		<nml_option name="config_gofs_forcing_ramp_delay" type="real" default_value="0.0" units="days"
+					description="Number of days to delay GOFS coupling forcing ramp"
+					possible_values="Any non-negative real number"
 		/>
 	</nml_record>
 	<nml_record name="Rayleigh_damping" mode="forward">
@@ -4366,8 +4374,8 @@
 			packages="timeVaryingLandIceForcingPKG"
 		/>
 		<!-- GOFS coupling input fields (time-varying, read via mpas_forcing framework) -->
-		<var name="gofsBaroclinicPGrad" type="real" dimensions="nEdges Time" units="m s^-2"
-			description="Depth-integrated baroclinic PG from GOFS3.1, normal component at edges"
+		<var name="gofsBaroclinicPGrad" type="real" dimensions="nEdges Time" units="Pa"
+			description="Depth-integrated baroclinic PG from GOFS3.1 (Pa); model converts to m/s2 by dividing by rho_sw*H"
 			packages="gofsCouplingPKG"
 		/>
 		<var name="gofsSurfaceDensity" type="real" dimensions="nCells Time" units="kg m^-3"

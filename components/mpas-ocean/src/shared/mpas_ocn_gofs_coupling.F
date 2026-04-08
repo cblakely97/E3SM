@@ -59,6 +59,7 @@ module ocn_gofs_coupling
    logical :: gofsCouplingOn
    real (kind=RKIND) :: gofsDragCoeff
    real (kind=RKIND) :: gdensity0Inv_gofs
+   real (kind=RKIND) :: gofsRamp, gofsRampDelay
    integer :: gofsNFilterInterval, gofsNFilterSamples
 
    ! Pointers to time-varying input fields (from timeVaryingForcing pool)
@@ -96,11 +97,17 @@ contains
          gofsNFilterInterval = config_gofs_filter_interval
          gofsNFilterSamples = config_gofs_filter_nsamples
          gdensity0Inv_gofs = gravity / rho_sw
+         gofsRamp = config_gofs_forcing_ramp
+         gofsRampDelay = config_gofs_forcing_ramp_delay
 
          call mpas_log_write('')
          call mpas_log_write(' GOFS3.1 one-way coupling enabled')
          call mpas_log_write('   tidal drag coeff multiplier: $r', &
               realArgs=(/gofsDragCoeff/))
+         call mpas_log_write('   forcing ramp duration:       $r days', &
+              realArgs=(/gofsRamp/))
+         call mpas_log_write('   forcing ramp delay:          $r days', &
+              realArgs=(/gofsRampDelay/))
          call mpas_log_write('   filter sub-sample interval:  $i timesteps', &
               intArgs=(/gofsNFilterInterval/))
          call mpas_log_write('   filter buffer size:          $i samples', &
@@ -227,7 +234,9 @@ contains
 
       real (kind=RKIND), pointer :: forcingTimeIncrement
       type (mpas_pool_type), pointer :: forcingPool
+      type (mpas_forcing_group_type), pointer :: gofsForcingGroup
       real (kind=RKIND) :: dtSim
+      type (MPAS_TimeInterval_type) :: timeStepReverse
 
       if (.not. gofsCouplingOn) return
 
@@ -245,8 +254,23 @@ contains
            streamManager, &
            dtSim)
 
-      ! Reverse the clock advance (same pattern as atmospheric forcing)
-      call mpas_advance_forcing_clock(forcingGroupHead, -dtSim)
+      ! Reverse the clock advance.
+      ! Cannot use mpas_advance_forcing_clock with negative dt because
+      ! mpas_set_timeInterval(dt=) cannot handle negative reals.
+      ! Instead, construct the interval with integer seconds and
+      ! advance the clock directly.
+      call mpas_set_timeInterval(timeStepReverse, &
+           S_i8=-int(dtSim, I8KIND))
+      gofsForcingGroup => forcingGroupHead
+      do while (associated(gofsForcingGroup))
+         if (trim(gofsForcingGroup % forcingGroupName) == &
+              "ocn_gofs_coupling") then
+            call mpas_advance_clock(gofsForcingGroup % forcingClock, &
+                 timeStepReverse)
+            exit
+         end if
+         gofsForcingGroup => gofsForcingGroup % next
+      end do
 
    end subroutine ocn_gofs_coupling_get_forcing!}}}
 
@@ -259,9 +283,11 @@ contains
 !> \date    March 2026
 !> \details
 !>  Computes the external pressure gradient at each edge:
-!>    externalPG = gofsBaroclinicPGrad(iEdge)
+!>    externalPG = gofsBaroclinicPGrad(iEdge) / (rho_sw * Hedge)
 !>               + (g/rho_0) * [rho_s(cell2)*ssh(cell2)
 !>                            - rho_s(cell1)*ssh(cell1)] / dcEdge(iEdge)
+!>  The BPG input field is in Pa (depth-integrated), so dividing by
+!>  (rho_sw * Hedge) converts to depth-averaged acceleration (m/s²).
 !>  Applied uniformly at all depth levels.
 !>  Sign follows existing PG convention (tend -= PG).
 !
@@ -274,15 +300,25 @@ contains
       integer, intent(out) :: err
 
       integer :: iEdge, k, cell1, cell2, kMin, kMax
-      real (kind=RKIND) :: externalPG, invdcEdge
+      real (kind=RKIND) :: externalPG, invdcEdge, Hedge, sd1, sd2
+      real (kind=RKIND) :: rampFactor, t
 
       err = 0
       if (.not. gofsCouplingOn) return
 
+      ! Compute ramp factor (same tanh profile as atmospheric forcing)
+      if (daysSinceStartOfSim >= gofsRampDelay) then
+         t = daysSinceStartOfSim
+         rampFactor = tanh(2.0_RKIND * (t - gofsRampDelay) / gofsRamp)
+      else
+         rampFactor = 0.0_RKIND
+      end if
+
       call mpas_timer_start('vel gofs pgrad')
 
       !$omp do schedule(runtime) &
-      !$omp    private(cell1, cell2, invdcEdge, kMin, kMax, externalPG, k)
+      !$omp    private(cell1, cell2, invdcEdge, kMin, kMax, externalPG, &
+      !$omp            Hedge, sd1, sd2, k)
       do iEdge = 1, nEdgesOwned
          cell1 = cellsOnEdge(1, iEdge)
          cell2 = cellsOnEdge(2, iEdge)
@@ -291,19 +327,38 @@ contains
          kMax = maxLevelEdgeTop(iEdge)
 
          if (kMax >= kMin) then
-            ! External PG: baroclinic PG + surface-density-weighted SSH gradient
-            externalPG = gofsBaroclinicPGrad(iEdge) &
-                       + gdensity0Inv_gofs * invdcEdge &
-                       * (gofsSurfaceDensity(cell2) * ssh(cell2) &
-                        - gofsSurfaceDensity(cell1) * ssh(cell1))
+            ! Edge column depth: min of the two adjacent cell depths
+            ! (matches preprocessing integration limit).
+            ! Skip BPG conversion for shallow/dry edges where bottomDepth
+            ! is too small (wetting-drying regions, land margins).
+            Hedge = min(bottomDepth(cell1), bottomDepth(cell2))
+
+            if (Hedge > 10.0_RKIND) then
+               ! Guard against NaN surface density at land cells
+               sd1 = gofsSurfaceDensity(cell1)
+               sd2 = gofsSurfaceDensity(cell2)
+               if (sd1 /= sd1) sd1 = 0.0_RKIND  ! NaN check
+               if (sd2 /= sd2) sd2 = 0.0_RKIND
+
+               ! gofsBaroclinicPGrad is in Pa (depth-integrated); divide by
+               ! (rho_sw * Hedge) to get depth-averaged acceleration (m/s²)
+               externalPG = gofsBaroclinicPGrad(iEdge) &
+                          / (rho_sw * Hedge) &
+                          + gdensity0Inv_gofs * invdcEdge &
+                          * (sd2 * ssh(cell2) - sd1 * ssh(cell1))
+            else
+               ! Shallow/dry edge: no GOFS forcing (SSH can be extreme
+               ! at wetting-drying boundaries, producing huge gradients)
+               externalPG = 0.0_RKIND
+            end if
 
             ! Store diagnostic
             gofsExternalPGrad(iEdge) = externalPG
 
-            ! Apply uniformly at all depth levels
+            ! Apply uniformly at all depth levels (with ramp)
             do k = kMin, kMax
                tend(k, iEdge) = tend(k, iEdge) &
-                               - edgeMask(k, iEdge) * externalPG
+                    - rampFactor * edgeMask(k, iEdge) * externalPG
             end do
          end if
       end do
@@ -336,10 +391,18 @@ contains
       integer, intent(out) :: err
 
       integer :: iEdge, k
-      real (kind=RKIND) :: dragTend
+      real (kind=RKIND) :: dragTend, rampFactor, t
 
       err = 0
       if (.not. gofsCouplingOn) return
+
+      ! Compute ramp factor (same as tend_pgrad)
+      if (daysSinceStartOfSim >= gofsRampDelay) then
+         t = daysSinceStartOfSim
+         rampFactor = tanh(2.0_RKIND * (t - gofsRampDelay) / gofsRamp)
+      else
+         rampFactor = 0.0_RKIND
+      end if
 
       call mpas_timer_start('vel gofs tidal drag')
 
@@ -347,7 +410,7 @@ contains
       do iEdge = 1, nEdgesOwned
          k = maxLevelEdgeTop(iEdge)
          if (k > 0) then
-            dragTend = gofsDragCoeff &
+            dragTend = rampFactor * gofsDragCoeff &
                      * gofsInternalTideDragCoeff(iEdge) &
                      * gofsTidalVelocity(iEdge)
             tend(k, iEdge) = tend(k, iEdge) - dragTend
