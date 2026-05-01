@@ -10,7 +10,7 @@
 !  ocn_gofs_coupling
 !
 !> \brief MPAS-Ocean GOFS3.1 one-way coupling
-!> \author Caleb Blakely
+!> \author Coleman Blakely
 !> \date   March 2026
 !> \details
 !>  This module implements one-way coupling from GOFS3.1 (HYCOM reanalysis)
@@ -39,6 +39,8 @@ module ocn_gofs_coupling
    use ocn_diagnostics_variables
    use ocn_config
    use mpas_log
+   use ocn_vel_forcing_topographic_wave_drag, only: &
+       ocn_vel_forcing_topographic_wave_drag_recompute
 
    implicit none
    private
@@ -48,7 +50,6 @@ module ocn_gofs_coupling
              ocn_gofs_coupling_forcing_init, &
              ocn_gofs_coupling_get_forcing, &
              ocn_gofs_coupling_tend_pgrad, &
-             ocn_gofs_coupling_tend_drag, &
              ocn_gofs_coupling_compute_lowpass, &
              ocn_gofs_coupling_update_filter
 
@@ -57,7 +58,6 @@ module ocn_gofs_coupling
    !--------------------------------------------------------------------
 
    logical :: gofsCouplingOn
-   real (kind=RKIND) :: gofsDragCoeff
    real (kind=RKIND) :: gdensity0Inv_gofs
    real (kind=RKIND) :: gofsRamp, gofsRampDelay
    integer :: gofsNFilterInterval, gofsNFilterSamples
@@ -65,7 +65,8 @@ module ocn_gofs_coupling
    ! Pointers to time-varying input fields (from timeVaryingForcing pool)
    real (kind=RKIND), dimension(:), pointer :: gofsBaroclinicPGrad => null()
    real (kind=RKIND), dimension(:), pointer :: gofsSurfaceDensity => null()
-   real (kind=RKIND), dimension(:), pointer :: gofsInternalTideDragCoeff => null()
+   real (kind=RKIND), dimension(:), pointer :: gofsNBottom => null()
+   real (kind=RKIND), dimension(:), pointer :: gofsNDepthAvg => null()
 
 !***********************************************************************
 
@@ -76,7 +77,7 @@ contains
 !  routine ocn_gofs_coupling_init
 !
 !> \brief   Initialize GOFS coupling module flags and constants
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Sets module-level flags and constants from namelist config.
@@ -93,7 +94,6 @@ contains
 
       if (config_use_gofs_coupling) then
          gofsCouplingOn = .true.
-         gofsDragCoeff = config_gofs_tidal_drag_coeff
          gofsNFilterInterval = config_gofs_filter_interval
          gofsNFilterSamples = config_gofs_filter_nsamples
          gdensity0Inv_gofs = gravity / rho_sw
@@ -102,8 +102,7 @@ contains
 
          call mpas_log_write('')
          call mpas_log_write(' GOFS3.1 one-way coupling enabled')
-         call mpas_log_write('   tidal drag coeff multiplier: $r', &
-              realArgs=(/gofsDragCoeff/))
+         call mpas_log_write('   wave drag: via topographic wave drag framework')
          call mpas_log_write('   forcing ramp duration:       $r days', &
               realArgs=(/gofsRamp/))
          call mpas_log_write('   forcing ramp delay:          $r days', &
@@ -122,7 +121,7 @@ contains
 !  routine ocn_gofs_coupling_forcing_init
 !
 !> \brief   Initialize GOFS time-varying forcing via mpas_forcing framework
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Sets up the mpas_forcing group and fields for reading time-varying
@@ -179,10 +178,22 @@ contains
            domain % streamManager, &
            forcingGroupHead, &
            "ocn_gofs_coupling", &
-           "gofsInternalTideDragCoeff", &
+           "gofsNBottom", &
            "gofs_coupling", &
            "timeVaryingForcing", &
-           "gofsInternalTideDragCoeff", &
+           "gofsNBottom", &
+           "linear", &
+           config_gofs_forcing_reference_time, &
+           config_gofs_forcing_interval)
+
+      call mpas_forcing_init_field( &
+           domain % streamManager, &
+           forcingGroupHead, &
+           "ocn_gofs_coupling", &
+           "gofsNDepthAvg", &
+           "gofs_coupling", &
+           "timeVaryingForcing", &
+           "gofsNDepthAvg", &
            "linear", &
            config_gofs_forcing_reference_time, &
            config_gofs_forcing_interval)
@@ -202,8 +213,10 @@ contains
            gofsBaroclinicPGrad)
       call mpas_pool_get_array(tvfPool, 'gofsSurfaceDensity', &
            gofsSurfaceDensity)
-      call mpas_pool_get_array(tvfPool, 'gofsInternalTideDragCoeff', &
-           gofsInternalTideDragCoeff)
+      call mpas_pool_get_array(tvfPool, 'gofsNBottom', &
+           gofsNBottom)
+      call mpas_pool_get_array(tvfPool, 'gofsNDepthAvg', &
+           gofsNDepthAvg)
 
       ! Initialize filter state
       gofsFilterIndex = 1
@@ -217,7 +230,7 @@ contains
 !  routine ocn_gofs_coupling_get_forcing
 !
 !> \brief   Update time-varying GOFS forcing fields via interpolation
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Calls the mpas_forcing framework to update the interpolated GOFS
@@ -237,6 +250,7 @@ contains
       type (mpas_forcing_group_type), pointer :: gofsForcingGroup
       real (kind=RKIND) :: dtSim
       type (MPAS_TimeInterval_type) :: timeStepReverse
+      integer :: err_recompute
 
       if (.not. gofsCouplingOn) return
 
@@ -272,6 +286,12 @@ contains
          gofsForcingGroup => gofsForcingGroup % next
       end do
 
+      ! Recompute topographic wave drag coefficients from updated GOFS
+      ! buoyancy frequencies. The topo wave drag tend routine will apply
+      ! these using tidal velocity.
+      call ocn_vel_forcing_topographic_wave_drag_recompute( &
+           gofsNBottom, gofsNDepthAvg, err_recompute)
+
    end subroutine ocn_gofs_coupling_get_forcing!}}}
 
 !***********************************************************************
@@ -279,15 +299,17 @@ contains
 !  routine ocn_gofs_coupling_tend_pgrad
 !
 !> \brief   Compute external pressure gradient tendency from GOFS coupling
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Computes the external pressure gradient at each edge:
 !>    externalPG = gofsBaroclinicPGrad(iEdge) / (rho_sw * Hedge)
-!>               + (g/rho_0) * [rho_s(cell2)*ssh(cell2)
-!>                            - rho_s(cell1)*ssh(cell1)] / dcEdge(iEdge)
+!>               + (g/rho_0) * [(rho_s(cell2)-rho_0)*ssh(cell2)
+!>                            - (rho_s(cell1)-rho_0)*ssh(cell1)] / dcEdge
 !>  The BPG input field is in Pa (depth-integrated), so dividing by
 !>  (rho_sw * Hedge) converts to depth-averaged acceleration (m/s²).
+!>  The surface density term uses the anomaly (rho_s - rho_0) because
+!>  MPAS already applies g*grad(ssh); only the density correction is needed.
 !>  Applied uniformly at all depth levels.
 !>  Sign follows existing PG convention (tend -= PG).
 !
@@ -337,15 +359,18 @@ contains
                ! Guard against NaN surface density at land cells
                sd1 = gofsSurfaceDensity(cell1)
                sd2 = gofsSurfaceDensity(cell2)
-               if (sd1 /= sd1) sd1 = 0.0_RKIND  ! NaN check
-               if (sd2 /= sd2) sd2 = 0.0_RKIND
+               if (sd1 /= sd1) sd1 = rho_sw  ! NaN → reference density (zero anomaly)
+               if (sd2 /= sd2) sd2 = rho_sw
 
                ! gofsBaroclinicPGrad is in Pa (depth-integrated); divide by
-               ! (rho_sw * Hedge) to get depth-averaged acceleration (m/s²)
+               ! (rho_sw * Hedge) to get depth-averaged acceleration (m/s²).
+               ! Surface density term uses anomaly (rho_s - rho_sw) so we
+               ! only add the correction; MPAS already has g*grad(ssh).
                externalPG = gofsBaroclinicPGrad(iEdge) &
                           / (rho_sw * Hedge) &
                           + gdensity0Inv_gofs * invdcEdge &
-                          * (sd2 * ssh(cell2) - sd1 * ssh(cell1))
+                          * ((sd2 - rho_sw) * ssh(cell2) &
+                           - (sd1 - rho_sw) * ssh(cell1))
             else
                ! Shallow/dry edge: no GOFS forcing (SSH can be extreme
                ! at wetting-drying boundaries, producing huge gradients)
@@ -370,65 +395,10 @@ contains
 
 !***********************************************************************
 !
-!  routine ocn_gofs_coupling_tend_drag
-!
-!> \brief   Compute internal tide drag tendency from GOFS coupling
-!> \author  Caleb Blakely
-!> \date    March 2026
-!> \details
-!>  Applies GOFS-derived drag at the bottom level only:
-!>    tend(kBot,iEdge) -= dragCoeff * gofsInternalTideDragCoeff(iEdge)
-!>                      * gofsTidalVelocity(iEdge)
-!>  gofsTidalVelocity is pre-computed before the RK loop and held
-!>  constant across substeps.
-!
-!-----------------------------------------------------------------------
-
-   subroutine ocn_gofs_coupling_tend_drag(normalVelocity, tend, err)!{{{
-
-      real (kind=RKIND), dimension(:,:), intent(in) :: normalVelocity
-      real (kind=RKIND), dimension(:,:), intent(inout) :: tend
-      integer, intent(out) :: err
-
-      integer :: iEdge, k
-      real (kind=RKIND) :: dragTend, rampFactor, t
-
-      err = 0
-      if (.not. gofsCouplingOn) return
-
-      ! Compute ramp factor (same as tend_pgrad)
-      if (daysSinceStartOfSim >= gofsRampDelay) then
-         t = daysSinceStartOfSim
-         rampFactor = tanh(2.0_RKIND * (t - gofsRampDelay) / gofsRamp)
-      else
-         rampFactor = 0.0_RKIND
-      end if
-
-      call mpas_timer_start('vel gofs tidal drag')
-
-      !$omp do schedule(runtime) private(k, dragTend)
-      do iEdge = 1, nEdgesOwned
-         k = maxLevelEdgeTop(iEdge)
-         if (k > 0) then
-            dragTend = rampFactor * gofsDragCoeff &
-                     * gofsInternalTideDragCoeff(iEdge) &
-                     * gofsTidalVelocity(iEdge)
-            tend(k, iEdge) = tend(k, iEdge) - dragTend
-            gofsTidalDragTend(iEdge) = dragTend
-         end if
-      end do
-      !$omp end do
-
-      call mpas_timer_stop('vel gofs tidal drag')
-
-   end subroutine ocn_gofs_coupling_tend_drag!}}}
-
-!***********************************************************************
-!
 !  routine ocn_gofs_coupling_compute_lowpass
 !
 !> \brief   Compute barotropic, lowpass, and tidal velocities
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Called once per timestep, before the RK loop.
@@ -504,7 +474,7 @@ contains
 !  routine ocn_gofs_coupling_update_filter
 !
 !> \brief   Update the 25-hour filter circular buffer
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    March 2026
 !> \details
 !>  Called once per timestep, after the RK loop.

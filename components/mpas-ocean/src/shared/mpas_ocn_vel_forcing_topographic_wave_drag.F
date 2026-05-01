@@ -47,7 +47,8 @@ module ocn_vel_forcing_topographic_wave_drag
    !--------------------------------------------------------------------
 
    public :: ocn_vel_forcing_topographic_wave_drag_tend, &
-             ocn_vel_forcing_topographic_wave_drag_init
+             ocn_vel_forcing_topographic_wave_drag_init, &
+             ocn_vel_forcing_topographic_wave_drag_recompute
 
    !--------------------------------------------------------------------
    !
@@ -55,9 +56,12 @@ module ocn_vel_forcing_topographic_wave_drag
    !
    !--------------------------------------------------------------------
 
-   logical :: topographicWaveDragOn, tensorScheme 
+   logical :: topographicWaveDragOn, tensorScheme
+   logical :: useGofsTidalVelocity = .false.
    real (kind=RKIND) :: topographicWaveDragCoeff
-!   real (kind=RKIND), dimension(:), allocatable :: topographicWaveDrag
+   real (kind=RKIND) :: topoDragCutoffDepth_mod, topoDragCutoffWidth_mod
+   real (kind=RKIND), parameter :: omegaM2 = 1.405189e-4_RKIND
+   ! gofsTidalVelocity is accessed via ocn_diagnostics_variables
 
 !***********************************************************************
 
@@ -123,7 +127,19 @@ contains
       !          N(z) = N_0 exp(z/1300)
       ! Drag: rho_0 C u
       
-      if ( .not. tensorScheme) then
+      if (useGofsTidalVelocity) then
+          ! GOFS mode: drag on tidal velocity (barotropic - lowpass filtered)
+          !$omp do schedule(runtime) private(k)
+          do iEdge = 1, nEdgesOwned
+            k = maxLevelEdgeTop(iEdge)
+            if (k > 0) then
+              temp_twd(iEdge) = topographicWaveDrag(iEdge) &
+                              * gofsTidalVelocity(iEdge)
+              tend(k, iEdge) = tend(k, iEdge) - temp_twd(iEdge)
+            endif
+          enddo
+          !$omp end do
+      else if ( .not. tensorScheme) then
           !$omp do schedule(runtime) private(k)
           do iEdge = 1, nEdgesOwned
             k =  maxLevelEdgeTop(iEdge)
@@ -176,8 +192,6 @@ contains
 
       integer, intent(out) :: err !< Output: error flag
 
-      real (kind=RKIND) :: topoDragCutoffDepth, topoDragCutoffWidth
-      real (kind=RKIND) :: omegaM2 = 1.405189e-4_RKIND
       real (kind=RKIND) :: kappa
       real (kind=RKIND) :: N0, L, Nb, Nbar, gam
       real (kind=RKIND) :: topoDragTurnOff
@@ -186,14 +200,35 @@ contains
 
       err = 0
 
-
       topographicWaveDragCoeff = 0.0_RKIND
+      useGofsTidalVelocity = .false.
 
       if (config_use_topographic_wave_drag) then
           topographicWaveDragOn = .true.
           topographicWaveDragCoeff = config_topographic_wave_drag_coeff
-          topoDragCutoffDepth = config_topographic_wave_drag_cutoff_depth
-          topoDragCutoffWidth = config_topographic_wave_drag_cutoff_width
+          topoDragCutoffDepth_mod = config_topographic_wave_drag_cutoff_depth
+          topoDragCutoffWidth_mod = config_topographic_wave_drag_cutoff_width
+
+          ! When GOFS coupling is active, retrieve tidal velocity pointer
+          ! and skip static coefficient computation (GOFS recompute will
+          ! populate topographicWaveDrag at each forcing update).
+          if (config_use_gofs_coupling) then
+              useGofsTidalVelocity = .true.
+              ! gofsTidalVelocity pointer is set up by
+              ! ocn_diagnostics_variables during its init.
+              ! Determine scheme for recompute calls
+              if (config_topographic_wave_drag_scheme.EQ."LGF") then
+                  tensorScheme = .false.  ! GOFS uses scalar LGF with bed_slope_edges
+              else
+                  tensorScheme = .false.
+              end if
+              call mpas_log_write('')
+              call mpas_log_write(' Topographic wave drag: GOFS mode (' // &
+                   trim(config_topographic_wave_drag_scheme) // &
+                   ' scheme, tidal velocity)')
+              call mpas_log_write('')
+          else
+
           if (config_topographic_wave_drag_scheme.EQ."JSL") then
               call mpas_log_write("")
               call mpas_log_write(" Topographic wave drag scheme is: Jayne and St. Laurent")
@@ -278,11 +313,14 @@ contains
               kmax =  maxLevelEdgeTop(iEdge)
               if (kmax > 0) then
                   k = 1
-                  topoDragTurnOff = (TANH((layerThickEdgeMean(k,iEdge)-topoDragCutoffDepth)/topoDragCutoffWidth)+1.0_RKIND)/2.0_RKIND
+                  topoDragTurnOff = (TANH((layerThickEdgeMean(k,iEdge)-topoDragCutoffDepth_mod) &
+                                   /topoDragCutoffWidth_mod)+1.0_RKIND)/2.0_RKIND
                   topographicWaveDrag(iEdge) = topoDragTurnOff * topographicWaveDrag(iEdge)
               endif
           enddo
-          
+
+          end if ! config_use_gofs_coupling else block
+
       endif
 
       if (config_disable_vel_topographic_wave_drag) topographicWaveDragOn = .false.
@@ -290,6 +328,120 @@ contains
    !--------------------------------------------------------------------
 
    end subroutine ocn_vel_forcing_topographic_wave_drag_init!}}}
+
+!***********************************************************************
+
+!***********************************************************************
+!
+!  routine ocn_vel_forcing_topographic_wave_drag_recompute
+!
+!> \brief   Recompute drag coefficients from external buoyancy frequencies
+!> \author  Caleb Blakely
+!> \date    April 2026
+!> \details
+!>  Recomputes topographicWaveDrag(iEdge) from provided bottom and
+!>  depth-averaged buoyancy frequencies using the currently selected
+!>  scheme (ZAE or LGF) with bed_slope_edges and depth cutoff ramp.
+!>  Called by the GOFS coupling module after each forcing update.
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_vel_forcing_topographic_wave_drag_recompute( &!{{{
+                  Nb_ext, Nbar_ext, err)
+
+      real (kind=RKIND), dimension(:), intent(in) :: Nb_ext
+      real (kind=RKIND), dimension(:), intent(in) :: Nbar_ext
+      integer, intent(out) :: err
+
+      integer :: iEdge, k, kmax
+      real (kind=RKIND) :: topoDragTurnOff
+      real (kind=RKIND) :: Nb2, Nbar2, term_bot, term_davg
+      real (kind=RKIND) :: kappa
+      real (kind=RKIND), parameter :: gam = 50.0_RKIND
+
+      err = 0
+      if (.not. topographicWaveDragOn) return
+
+      if (config_topographic_wave_drag_scheme .EQ. "JSL") then
+          ! Jayne & St. Laurent: C = coeff * kappa * stddev(H)^2 * Nb
+          !                         / layerThickness
+          kappa = pi / 10000.0_RKIND
+          do iEdge = 1, nEdgesAll
+              kmax = maxLevelEdgeTop(iEdge)
+              topographicWaveDrag(iEdge) = 0.0_RKIND
+              if (kmax > 0) then
+                  k = maxLevelEdgeTop(iEdge)
+                  if (Nb_ext(iEdge) > 0.0_RKIND) then
+                      topographicWaveDrag(iEdge) = &
+                          topographicWaveDragCoeff * kappa &
+                        * bathy_stddev(iEdge)**2 &
+                        * Nb_ext(iEdge) &
+                        / layerThickEdgeMean(k, iEdge)
+                  end if
+              end if
+          end do
+
+      else if (config_topographic_wave_drag_scheme .EQ. "LGF") then
+          ! Lyard et al.: C = coeff * sqrt((Nb^2 - w^2)(Nbar^2 - w^2))
+          !                   / (4*pi*w) * |grad(h)|
+          do iEdge = 1, nEdgesAll
+              kmax = maxLevelEdgeTop(iEdge)
+              topographicWaveDrag(iEdge) = 0.0_RKIND
+              if (kmax > 0) then
+                  Nb2 = Nb_ext(iEdge)**2
+                  Nbar2 = Nbar_ext(iEdge)**2
+                  term_bot = Nb2 - omegaM2**2
+                  term_davg = Nbar2 - omegaM2**2
+                  if (term_bot > 0.0_RKIND .and. &
+                      term_davg > 0.0_RKIND) then
+                      topographicWaveDrag(iEdge) = &
+                          topographicWaveDragCoeff &
+                        * sqrt(term_bot * term_davg) &
+                        / (4.0_RKIND * pi * omegaM2) &
+                        * bed_slope_edges(iEdge)
+                  end if
+              end if
+          end do
+
+      else if (config_topographic_wave_drag_scheme .EQ. "ZAE") then
+          ! Zaron & Egbert: C = coeff * gamma * Nb * Nbar * |grad(h)|^2
+          !                     / (8 * pi^2 * w)
+          do iEdge = 1, nEdgesAll
+              kmax = maxLevelEdgeTop(iEdge)
+              topographicWaveDrag(iEdge) = 0.0_RKIND
+              if (kmax > 0) then
+                  if (Nb_ext(iEdge) > 0.0_RKIND .and. &
+                      Nbar_ext(iEdge) > 0.0_RKIND) then
+                      topographicWaveDrag(iEdge) = &
+                          topographicWaveDragCoeff * gam &
+                        * bed_slope_edges(iEdge)**2 &
+                        * Nbar_ext(iEdge) * Nb_ext(iEdge) &
+                        / (8.0_RKIND * omegaM2 * pi**2)
+                  end if
+              end if
+          end do
+
+      else
+          call mpas_log_write( &
+              "GOFS recompute: unsupported scheme '" // &
+              trim(config_topographic_wave_drag_scheme) // "'", &
+              MPAS_LOG_CRIT)
+      end if
+
+      ! Apply depth cutoff ramp (same as init)
+      do iEdge = 1, nEdgesAll
+          kmax = maxLevelEdgeTop(iEdge)
+          if (kmax > 0) then
+              k = 1
+              topoDragTurnOff = (TANH((layerThickEdgeMean(k,iEdge) &
+                  - topoDragCutoffDepth_mod) / topoDragCutoffWidth_mod) &
+                  + 1.0_RKIND) / 2.0_RKIND
+              topographicWaveDrag(iEdge) = topoDragTurnOff &
+                  * topographicWaveDrag(iEdge)
+          end if
+      end do
+
+   end subroutine ocn_vel_forcing_topographic_wave_drag_recompute!}}}
 
 !***********************************************************************
 

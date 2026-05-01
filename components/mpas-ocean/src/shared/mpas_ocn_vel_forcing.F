@@ -134,9 +134,6 @@ contains
                    tend, err1)
       err = ior(err, err1)
 
-      call ocn_gofs_coupling_tend_drag(normalVelocity, tend, err1)
-      err = ior(err, err1)
-
    !--------------------------------------------------------------------
 
    end subroutine ocn_vel_forcing_tend!}}}

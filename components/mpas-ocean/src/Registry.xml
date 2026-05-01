@@ -1233,10 +1233,6 @@
 					description="Enable GOFS3.1 one-way coupling (external PG forcing + internal tide drag)"
 					possible_values=".true. or .false."
 		/>
-		<nml_option name="config_gofs_tidal_drag_coeff" type="real" default_value="1.0" units="unitless"
-					description="Tuning multiplier for the GOFS internal tide drag coefficient"
-					possible_values="any positive real"
-		/>
 		<nml_option name="config_gofs_filter_interval" type="integer" default_value="10" units="timesteps"
 					description="Sub-sampling interval for the 25-hour boxcar filter"
 					possible_values="any positive integer"
@@ -2473,7 +2469,8 @@
 			mode="forward;analysis">
 			<var name="gofsBaroclinicPGrad"/>
 			<var name="gofsSurfaceDensity"/>
-			<var name="gofsInternalTideDragCoeff"/>
+			<var name="gofsNBottom"/>
+			<var name="gofsNDepthAvg"/>
 		</stream>
 
 	</streams>
@@ -4382,8 +4379,12 @@
 			description="Surface density from GOFS3.1 at cell centers"
 			packages="gofsCouplingPKG"
 		/>
-		<var name="gofsInternalTideDragCoeff" type="real" dimensions="nEdges Time" units="s^-1"
-			description="Internal tide drag coefficient from GOFS3.1 at edges"
+		<var name="gofsNBottom" type="real" dimensions="nEdges Time" units="s^-1"
+			description="Bottom buoyancy frequency from GOFS3.1 on edges"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsNDepthAvg" type="real" dimensions="nEdges Time" units="s^-1"
+			description="Depth-averaged buoyancy frequency from GOFS3.1 on edges"
 			packages="gofsCouplingPKG"
 		/>
 	</var_struct>
