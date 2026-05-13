@@ -2,9 +2,6 @@
 if (NOT SCREAM_ONLY_GENERATE_BASELINES)
   include(ScreamUtils)
 
-  # Test utils
-  CreateUnitTest(utils "utils_tests.cpp")
-
   # Test column ops
   CreateUnitTest(column_ops "column_ops.cpp")
 
@@ -72,5 +69,10 @@ if (NOT SCREAM_ONLY_GENERATE_BASELINES)
   # Test atmosphere processes
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/atm_process_tests_named_procs.yaml
                  ${CMAKE_CURRENT_BINARY_DIR}/atm_process_tests_named_procs.yaml COPYONLY)
+
   CreateUnitTest(atm_proc "atm_process_tests.cpp")
+
+  if (EAMXX_ENABLE_PYTHON)
+    CreateUnitTest(pyfield "pyfield.cpp")
+  endif()
 endif()

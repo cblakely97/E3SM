@@ -1,13 +1,10 @@
-#include "share/eamxx_types.hpp"
-#include "share/eamxx_session.hpp"
-#include "share/util/eamxx_utils.hpp"
-
 #include "p3_main_wrap.hpp"
 #include "p3_test_data.hpp"
 #include "p3_ic_cases.hpp"
 
-#include "ekat/util/ekat_test_utils.hpp"
-#include "ekat/ekat_assert.hpp"
+#include "share/util/eamxx_utils.hpp"
+#include "share/core/eamxx_session.hpp"
+#include "share/core/eamxx_types.hpp"
 
 #include <chrono>
 #include <vector>
@@ -203,13 +200,13 @@ private:
       EKAT_REQUIRE_MSG(dim == f.dim,
                       "For field " << f.name << " read expected dim " <<
                       f.dim << " but got " << dim);
-      std::vector<int> ds(dim);
-      impl::read_scalars(ifile,ds);
+      int extents[3];
+      impl::read_scalars(ifile,extents);
       for (int i = 0; i < dim; ++i)
-        EKAT_REQUIRE_MSG(ds[i] == f.extent[i],
+        EKAT_REQUIRE_MSG(extents[i] == f.extent[i],
                         "For field " << f.name << " read expected dim "
                         << i << " to have extent " << f.extent[i] << " but got "
-                        << ds[i]);
+                        << extents[i]);
       impl::read_scalars(ifile,f.data, f.size);
     // The code below is to force a result difference. This is used by the
     // scream/scripts internal testing to verify that various DIFFs are detected.
