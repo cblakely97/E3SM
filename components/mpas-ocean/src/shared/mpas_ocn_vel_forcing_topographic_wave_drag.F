@@ -209,25 +209,25 @@ contains
           topoDragCutoffDepth_mod = config_topographic_wave_drag_cutoff_depth
           topoDragCutoffWidth_mod = config_topographic_wave_drag_cutoff_width
 
-          ! When GOFS coupling is active, retrieve tidal velocity pointer
-          ! and skip static coefficient computation (GOFS recompute will
-          ! populate topographicWaveDrag at each forcing update).
           if (config_use_gofs_coupling) then
               useGofsTidalVelocity = .true.
-              ! gofsTidalVelocity pointer is set up by
-              ! ocn_diagnostics_variables during its init.
-              ! Determine scheme for recompute calls
-              if (config_topographic_wave_drag_scheme.EQ."LGF") then
-                  tensorScheme = .false.  ! GOFS uses scalar LGF with bed_slope_edges
-              else
-                  tensorScheme = .false.
-              end if
+              tensorScheme = .false.
               call mpas_log_write('')
               call mpas_log_write(' Topographic wave drag: GOFS mode (' // &
                    trim(config_topographic_wave_drag_scheme) // &
                    ' scheme, tidal velocity)')
+              if (config_use_gofs_buoyancy_freq) then
+                  call mpas_log_write( &
+                       '   Buoyancy frequencies: GOFS (recomputed each update)')
+              else
+                  call mpas_log_write( &
+                       '   Buoyancy frequencies: parameterized (static coefficients)')
+              end if
               call mpas_log_write('')
-          else
+          end if
+
+          if (.not. config_use_gofs_coupling .or. &
+              .not. config_use_gofs_buoyancy_freq) then
 
           if (config_topographic_wave_drag_scheme.EQ."JSL") then
               call mpas_log_write("")
@@ -254,14 +254,6 @@ contains
               call mpas_log_write(" Topographic wave drag scheme is: Zaron and Egbert")
               call mpas_log_write("")
 
-              ! Cze = Gamma H grad(H)^2 Nb Nbar / (8 pi^2 omega)
-              ! Gamma = 50
-              ! N(z) = N0 exp(z/1300)
-              ! N0 = 5.24 x 10^-3
-              ! z = 0 at surface
-              ! Nb is N(z) evaluated at z = -H
-              ! Nbar = 1300 N0 (1 - exp(-H/1300))/H
-
               N0 = 5.24e-3_RKIND
               L = 1300.0_RKIND
               gam = 50.0_RKIND
@@ -269,7 +261,7 @@ contains
                   kmax =  maxLevelEdgeTop(iEdge)
                   topographicWaveDrag(iEdge) = 0.0_RKIND
                   if (kmax > 0) then
-                      k = 1 ! Note: Only works for single layer case
+                      k = 1
 
                       Nb = N0*exp(-layerThickEdgeMean(k,iEdge)/L)
                       Nbar = N0*L*(1.0_RKIND - exp(-layerThickEdgeMean(k,iEdge)/L)) / layerThickEdgeMean(k,iEdge)
@@ -301,14 +293,13 @@ contains
                                              + latGradEdge(iEdge)*lonGradEdge(iEdge)*(cos(angleEdge(iEdge))**2 - sin(angleEdge(iEdge))**2)
                   endif
               enddo
-          else 
+          else
               call mpas_log_write("")
-
               call mpas_log_write("Invalid parameter for config_topopgraphic_wave_drag_scheme. It must be one of: 'JSL', 'ZAE', or 'LGF'" , MPAS_LOG_CRIT)
               call mpas_log_write("")
           end if
 
-          ! Apply ramping factor to wave drag
+          ! Apply depth cutoff ramp
           do iEdge = 1, nEdgesAll
               kmax =  maxLevelEdgeTop(iEdge)
               if (kmax > 0) then
@@ -319,7 +310,7 @@ contains
               endif
           enddo
 
-          end if ! config_use_gofs_coupling else block
+          end if ! static coefficient computation
 
       endif
 

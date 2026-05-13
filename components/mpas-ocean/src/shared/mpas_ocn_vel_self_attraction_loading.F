@@ -34,6 +34,7 @@ module ocn_vel_self_attraction_loading
     use ocn_diagnostics_variables
     use ocn_config
     use ocn_mesh
+    use ocn_gofs_coupling, only: ocn_gofs_coupling_get_sal_fields
     use netcdf
     use mpas_global_sum_mod
 #ifdef _MPI
@@ -163,8 +164,10 @@ contains
         !-----------------------------------------------------------------
 
         integer :: iCell
-        real (kind=RKIND) :: rho0gInv
-        
+        real (kind=RKIND) :: rho0gInv, gofsRamp, sd
+        logical :: gofsActive
+        real (kind=RKIND), dimension(:), pointer :: surfDensPtr, bpPtr, bpAvgPtr
+
         call mpas_timer_start('SAL Calculation')
 
         err = 0
@@ -175,11 +178,28 @@ contains
 
         rho0gInv = 1.0_RKIND / rho_sw / gravity
 
-        do iCell = 1,nCellsAll
-          ! compute SAL wrt. the full barotropic bottom pressure
-          btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
-              ssh(iCell) + rho0gInv * surfacePressure(iCell) )
-        enddo
+        call ocn_gofs_coupling_get_sal_fields(gofsActive, surfDensPtr, &
+                                              bpPtr, bpAvgPtr, gofsRamp)
+
+        if (gofsActive .and. associated(surfDensPtr) &
+                       .and. associated(bpPtr) &
+                       .and. gofsRamp > 0.0_RKIND) then
+          do iCell = 1,nCellsAll
+            sd = surfDensPtr(iCell)
+            if (sd /= sd) sd = rho_sw
+            btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
+                ssh(iCell) + &
+                gofsRamp * (sd / rho_sw - 1.0_RKIND) * ssh(iCell) + &
+                gofsRamp * rho0gInv * &
+                (bpPtr(iCell) - bpAvgPtr(iCell)) + &
+                rho0gInv * surfacePressure(iCell) )
+          enddo
+        else
+          do iCell = 1,nCellsAll
+            btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
+                ssh(iCell) + rho0gInv * surfacePressure(iCell) )
+          enddo
+        endif
 
         if (.not. config_use_parallel_self_attraction_loading) then
 

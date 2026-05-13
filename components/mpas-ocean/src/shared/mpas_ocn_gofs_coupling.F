@@ -51,13 +51,17 @@ module ocn_gofs_coupling
              ocn_gofs_coupling_get_forcing, &
              ocn_gofs_coupling_tend_pgrad, &
              ocn_gofs_coupling_compute_lowpass, &
-             ocn_gofs_coupling_update_filter
+             ocn_gofs_coupling_update_filter, &
+             ocn_gofs_coupling_get_sal_fields
 
    !--------------------------------------------------------------------
    ! Private module variables
    !--------------------------------------------------------------------
 
    logical :: gofsCouplingOn
+   logical :: gofsBpgOn
+   logical :: gofsBuoyancyFreqOn
+   logical :: gofsSalOn
    real (kind=RKIND) :: gdensity0Inv_gofs
    real (kind=RKIND) :: gofsRamp, gofsRampDelay
    integer :: gofsNFilterInterval, gofsNFilterSamples
@@ -67,6 +71,8 @@ module ocn_gofs_coupling
    real (kind=RKIND), dimension(:), pointer :: gofsSurfaceDensity => null()
    real (kind=RKIND), dimension(:), pointer :: gofsNBottom => null()
    real (kind=RKIND), dimension(:), pointer :: gofsNDepthAvg => null()
+   real (kind=RKIND), dimension(:), pointer :: gofsBottomPressure => null()
+   real (kind=RKIND), dimension(:), pointer :: gofsBottomPressureAvg => null()
 
 !***********************************************************************
 
@@ -91,9 +97,15 @@ contains
 
       err = 0
       gofsCouplingOn = .false.
+      gofsBpgOn = .false.
+      gofsBuoyancyFreqOn = .false.
+      gofsSalOn = .false.
 
       if (config_use_gofs_coupling) then
          gofsCouplingOn = .true.
+         gofsBpgOn = config_use_gofs_bpg
+         gofsBuoyancyFreqOn = config_use_gofs_buoyancy_freq
+         gofsSalOn = config_use_gofs_sal
          gofsNFilterInterval = config_gofs_filter_interval
          gofsNFilterSamples = config_gofs_filter_nsamples
          gdensity0Inv_gofs = gravity / rho_sw
@@ -102,6 +114,12 @@ contains
 
          call mpas_log_write('')
          call mpas_log_write(' GOFS3.1 one-way coupling enabled')
+         call mpas_log_write('   BPG forcing:                 $l', &
+              logicArgs=(/gofsBpgOn/))
+         call mpas_log_write('   GOFS buoyancy frequencies:   $l', &
+              logicArgs=(/gofsBuoyancyFreqOn/))
+         call mpas_log_write('   GOFS SAL mass anomaly:       $l', &
+              logicArgs=(/gofsSalOn/))
          call mpas_log_write('   wave drag: via topographic wave drag framework')
          call mpas_log_write('   forcing ramp duration:       $r days', &
               realArgs=(/gofsRamp/))
@@ -136,6 +154,8 @@ contains
       type (domain_type), intent(inout) :: domain
 
       type (mpas_pool_type), pointer :: tvfPool
+      type (mpas_pool_type), pointer :: forcingPool
+      type (block_type), pointer :: block_ptr
 
       if (.not. gofsCouplingOn) return
 
@@ -198,6 +218,18 @@ contains
            config_gofs_forcing_reference_time, &
            config_gofs_forcing_interval)
 
+      call mpas_forcing_init_field( &
+           domain % streamManager, &
+           forcingGroupHead, &
+           "ocn_gofs_coupling", &
+           "gofsBottomPressure", &
+           "gofs_coupling", &
+           "timeVaryingForcing", &
+           "gofsBottomPressure", &
+           "linear", &
+           config_gofs_forcing_reference_time, &
+           config_gofs_forcing_interval)
+
       ! Initialize field data (reads initial time records)
       call mpas_forcing_init_field_data( &
            forcingGroupHead, &
@@ -217,6 +249,15 @@ contains
            gofsNBottom)
       call mpas_pool_get_array(tvfPool, 'gofsNDepthAvg', &
            gofsNDepthAvg)
+      call mpas_pool_get_array(tvfPool, 'gofsBottomPressure', &
+           gofsBottomPressure)
+
+      ! gofsBottomPressureAvg is time-invariant, read via gofs_coupling_init
+      ! stream (input_interval="initial_only") into the forcing pool
+      block_ptr => domain % blocklist
+      call mpas_pool_get_subpool(block_ptr % structs, 'forcing', forcingPool)
+      call mpas_pool_get_array(forcingPool, 'gofsBottomPressureAvg', &
+           gofsBottomPressureAvg)
 
       ! Initialize filter state
       gofsFilterIndex = 1
@@ -286,11 +327,10 @@ contains
          gofsForcingGroup => gofsForcingGroup % next
       end do
 
-      ! Recompute topographic wave drag coefficients from updated GOFS
-      ! buoyancy frequencies. The topo wave drag tend routine will apply
-      ! these using tidal velocity.
-      call ocn_vel_forcing_topographic_wave_drag_recompute( &
-           gofsNBottom, gofsNDepthAvg, err_recompute)
+      if (gofsBuoyancyFreqOn) then
+         call ocn_vel_forcing_topographic_wave_drag_recompute( &
+              gofsNBottom, gofsNDepthAvg, err_recompute)
+      end if
 
    end subroutine ocn_gofs_coupling_get_forcing!}}}
 
@@ -327,6 +367,7 @@ contains
 
       err = 0
       if (.not. gofsCouplingOn) return
+      if (.not. gofsBpgOn) return
 
       ! Compute ramp factor (same tanh profile as atmospheric forcing)
       if (daysSinceStartOfSim >= gofsRampDelay) then
@@ -546,6 +587,41 @@ contains
       end if
 
    end subroutine ocn_gofs_coupling_update_filter!}}}
+
+!***********************************************************************
+!
+!  routine ocn_gofs_coupling_get_sal_fields
+!
+!> \brief   Expose GOFS fields needed by the SAL module
+!> \author  Coleman Blakely
+!> \date    May 2026
+!
+!-----------------------------------------------------------------------
+
+   subroutine ocn_gofs_coupling_get_sal_fields(active, surfDens, bp, bpAvg, &
+                                                rampFac)!{{{
+
+      logical, intent(out) :: active
+      real (kind=RKIND), dimension(:), pointer, intent(out) :: surfDens
+      real (kind=RKIND), dimension(:), pointer, intent(out) :: bp
+      real (kind=RKIND), dimension(:), pointer, intent(out) :: bpAvg
+      real (kind=RKIND), intent(out) :: rampFac
+
+      real (kind=RKIND) :: t
+
+      active = gofsCouplingOn .and. gofsSalOn
+      surfDens => gofsSurfaceDensity
+      bp => gofsBottomPressure
+      bpAvg => gofsBottomPressureAvg
+
+      if (gofsCouplingOn .and. daysSinceStartOfSim >= gofsRampDelay) then
+         t = daysSinceStartOfSim
+         rampFac = tanh(2.0_RKIND * (t - gofsRampDelay) / gofsRamp)
+      else
+         rampFac = 0.0_RKIND
+      end if
+
+   end subroutine ocn_gofs_coupling_get_sal_fields!}}}
 
 !***********************************************************************
 

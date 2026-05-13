@@ -1274,6 +1274,18 @@
 					description="Number of days to delay GOFS coupling forcing ramp"
 					possible_values="Any non-negative real number"
 		/>
+		<nml_option name="config_use_gofs_bpg" type="logical" default_value=".true."
+					description="Enable baroclinic pressure gradient forcing from GOFS (only active when config_use_gofs_coupling is true)"
+					possible_values=".true. or .false."
+		/>
+		<nml_option name="config_use_gofs_buoyancy_freq" type="logical" default_value=".true."
+					description="Use GOFS-derived buoyancy frequencies for topographic wave drag (only active when config_use_gofs_coupling is true)"
+					possible_values=".true. or .false."
+		/>
+		<nml_option name="config_use_gofs_sal" type="logical" default_value=".true."
+					description="Enable GOFS surface density and bottom pressure anomaly in SAL (only active when config_use_gofs_coupling is true)"
+					possible_values=".true. or .false."
+		/>
 	</nml_record>
 	<nml_record name="Rayleigh_damping" mode="forward">
 		<nml_option name="config_Rayleigh_damping_coeff" type="real" default_value="1.0e-4" units="s^-1"
@@ -2471,6 +2483,17 @@
 			<var name="gofsSurfaceDensity"/>
 			<var name="gofsNBottom"/>
 			<var name="gofsNDepthAvg"/>
+			<var name="gofsBottomPressure"/>
+		</stream>
+
+		<stream name="gofs_coupling_init"
+			type="input"
+			input_interval="initial_only"
+			filename_template="gofs_coupling.nc"
+			packages="gofsCouplingPKG"
+			runtime_format="single_file"
+			mode="forward;analysis">
+			<var name="gofsBottomPressureAvg"/>
 		</stream>
 
 	</streams>
@@ -4332,6 +4355,10 @@
 			 description="Multiplication factors to smooth ssh at coastlines for SAL caculation"
 			 packages="tidalPotentialForcingPKG"
 		/>
+		<var name="gofsBottomPressureAvg" type="real" dimensions="nCells" units="Pa"
+			description="Time-averaged bottom pressure from GOFS3.1 at cell centers"
+			packages="gofsCouplingPKG"
+		/>
                	<var name="forcingTimeIncrement" type="real" dimensions="" units="s"
 			description="Time increment to compute forcing terms at intermediate time intervals"
 			packages="forwardMode"
@@ -4385,6 +4412,10 @@
 		/>
 		<var name="gofsNDepthAvg" type="real" dimensions="nEdges Time" units="s^-1"
 			description="Depth-averaged buoyancy frequency from GOFS3.1 on edges"
+			packages="gofsCouplingPKG"
+		/>
+		<var name="gofsBottomPressure" type="real" dimensions="nCells Time" units="Pa"
+			description="Bottom pressure from GOFS3.1 at cell centers (g * integral of rho dz)"
 			packages="gofsCouplingPKG"
 		/>
 	</var_struct>
