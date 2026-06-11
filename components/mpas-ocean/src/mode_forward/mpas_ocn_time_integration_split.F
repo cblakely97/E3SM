@@ -885,8 +885,6 @@ module ocn_time_integration_split
                barotropicForcing(iEdge) = splitFact* &
                               normalThicknessFluxSum/thicknessSum/dt
 
-               barotropicForcing(iEdge)=0.0_RKIND
-
                do k = minLevelEdgeBot(iEdge), kmax
                   ! These two steps are together here:
                   !{\bf u}'_{k,n+1} =
@@ -899,8 +897,6 @@ module ocn_time_integration_split
                          dt * barotropicForcing(iEdge))
 
                   normalBaroclinicVelocityNew(k,iEdge)=edgeMask_bc(k,iEdge)*normalBaroclinicVelocityNew(k,iEdge)
-
-                  normalBaroclinicVelocityNew(k,iEdge)=0.0_RKIND
 
                enddo
 
