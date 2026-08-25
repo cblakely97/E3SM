@@ -226,6 +226,7 @@
       <modules compiler="intel">
         <command name="load">PrgEnv-intel/8.5.0</command>
         <command name="load">intel/2023.2.0</command>
+        <command name="load">cray-libsci/23.12.5</command>
       </modules>
 
       <modules compiler="nvidia">
@@ -248,7 +249,11 @@
         <command name="load">cray-netcdf-hdf5parallel/4.9.0.9</command>
         <command name="load">cray-parallel-netcdf/1.12.3.9</command>
         <command name="load">cmake/3.24.3</command>
-        <command name="load">evp-patch</command>
+        <!-- evp-patch has been retired by NERSC and is no longer in
+             /global/common/software/nersc/pe/modulefiles/latest; loading it
+             aborts case.setup. Disabled here rather than per-case, because
+             resetting a case regenerates env_mach_specific.xml from this file. -->
+        <!--<command name="load">evp-patch</command>-->
       </modules>
     </module_system>
 
