@@ -131,7 +131,7 @@ contains
 !-----------------------------------------------------------------------
 
     subroutine ocn_compute_self_attraction_loading(domain, forcingPool, &
-        dminfo, ssh, surfacePressure, err)!{{{
+        dminfo, ssh, atmosphericPressure, err)!{{{
 
         !-----------------------------------------------------------------
         !
@@ -140,7 +140,7 @@ contains
         !-----------------------------------------------------------------
         type (dm_info), intent(in) :: dminfo
         real (kind=RKIND), dimension(:), intent(in) :: ssh
-        real (kind=RKIND), dimension(:), intent(in) :: surfacePressure
+        real (kind=RKIND), dimension(:), intent(in) :: atmosphericPressure
 
         !-----------------------------------------------------------------
         !
@@ -165,7 +165,7 @@ contains
         !-----------------------------------------------------------------
 
         integer :: iCell
-        real (kind=RKIND) :: rho0gInv, gofsRamp, sd
+        real (kind=RKIND) :: rho0gInv, gofsRamp, sd, bpAnom
         logical :: gofsActive
         real (kind=RKIND), dimension(:), pointer :: surfDensPtr, bpPtr, bpAvgPtr
 
@@ -188,17 +188,20 @@ contains
           do iCell = 1,nCellsAll
             sd = surfDensPtr(iCell)
             if (sd /= sd) sd = rho_sw
+            bpAnom = bpPtr(iCell) - bpAvgPtr(iCell)
+            if (bpAnom /= bpAnom) bpAnom = 0.0_RKIND
             btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
                 (ssh(iCell) - sshInitSAL(iCell)) + &
-                gofsRamp * (sd / rho_sw - 1.0_RKIND) * ssh(iCell) + &
-                gofsRamp * rho0gInv * &
-                (bpPtr(iCell) - bpAvgPtr(iCell)) + &
-                rho0gInv * surfacePressure(iCell) )
+                gofsRamp * (sd / rho_sw - 1.0_RKIND) * &
+                (ssh(iCell) - sshInitSAL(iCell)) + &
+                gofsRamp * rho0gInv * bpAnom + &
+                rho0gInv * atmosphericPressure(iCell) )
           enddo
         else
           do iCell = 1,nCellsAll
             btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
-                (ssh(iCell) - sshInitSAL(iCell)) + rho0gInv * surfacePressure(iCell) )
+                (ssh(iCell) - sshInitSAL(iCell)) + &
+                rho0gInv * atmosphericPressure(iCell) )
           enddo
         endif
 

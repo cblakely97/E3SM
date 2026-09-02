@@ -345,6 +345,9 @@ contains
       real (kind=RKIND), dimension(:), pointer, contiguous :: &
          ssh               ! sea surface height
 
+      real (kind=RKIND), dimension(:), pointer :: &
+         atmosphericPressure
+
       real (kind=RKIND), dimension(:,:), pointer, contiguous :: &
          normalVelocity,     &! normal velocity
          layerThickness
@@ -392,6 +395,8 @@ contains
                                              sfcStress)
       call mpas_pool_get_array(forcingPool, 'surfaceStressMagnitude', &
                                              sfcStressMag)
+      call mpas_pool_get_array(forcingPool, 'atmosphericPressure', &
+                                             atmosphericPressure)
 
       !*** Transfer data to device
       !$acc update device(zMid, divergence, relativeVorticity, normPlanetVortEdge, &
@@ -478,7 +483,7 @@ contains
           call mpas_log_write('       Computing SAL')
 #endif
           call ocn_compute_self_attraction_loading(domain, forcingPool, dminfo, &
-                                                   ssh, surfacePressure, err)
+                                                   ssh, atmosphericPressure, err)
           call mpas_reset_clock_alarm(domain % clock, 'salComputeAlarm', ierr=err)
       endif
 

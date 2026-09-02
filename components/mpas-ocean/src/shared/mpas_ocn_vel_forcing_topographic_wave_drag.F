@@ -327,7 +327,7 @@ contains
 !  routine ocn_vel_forcing_topographic_wave_drag_recompute
 !
 !> \brief   Recompute drag coefficients from external buoyancy frequencies
-!> \author  Caleb Blakely
+!> \author  Coleman Blakely
 !> \date    April 2026
 !> \details
 !>  Recomputes topographicWaveDrag(iEdge) from provided bottom and

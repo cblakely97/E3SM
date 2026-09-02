@@ -1071,23 +1071,12 @@ contains
       end select
 
       if (config_use_wetting_drying) then
-#ifdef MPAS_OPENACC
-         !$acc parallel loop collapse(2) &
-         !$acc    present(layerThickEdgeMean)
-#else
-         !$omp parallel
-         !$omp do schedule(runtime) private(k)
-#endif
          do iEdge = 1, nEdgesAll
             do k = 1,nVertLevels
                layerThickEdgeMean(k,iEdge) = &
                max(layerThickEdgeMean(k,iEdge), config_drying_min_cell_height)
             end do
          end do
-#ifndef MPAS_OPENACC
-        !$omp end do
-        !$omp end parallel
-#endif
       end if
 
       ! Compute edge flux based on option set on init
