@@ -1,19 +1,18 @@
 #include <catch2/catch.hpp>
 #include <numeric>
 
-#include "ekat/kokkos/ekat_subview_utils.hpp"
 #include "share/field/field_identifier.hpp"
 #include "share/field/field_header.hpp"
 #include "share/field/field.hpp"
 #include "share/field/field_manager.hpp"
 #include "share/field/field_utils.hpp"
-#include "share/util/eamxx_setup_random_test.hpp"
+#include "eamxx_setup_random_test.hpp"
+#include "share/util/eamxx_universal_constants.hpp"
 
 #include "share/grid/point_grid.hpp"
 
-#include "ekat/ekat_pack.hpp"
-#include "ekat/ekat_pack_utils.hpp"
-#include "ekat/util/ekat_test_utils.hpp"
+#include <ekat_pack.hpp>
+#include <ekat_subview_utils.hpp>
 
 namespace {
 
@@ -212,6 +211,58 @@ TEST_CASE("utils") {
     Real wavg = sp(sum_n_sq(dim0)) / sp(sum_n(dim0) * sum_n(dim0));
     REQUIRE_THAT(v(), Catch::Matchers::WithinRel(wavg, tol));
 
+    // Repeat but with masked values
+    result = fieldsc.clone();
+    // inject a mask as the last entry
+    auto field00_masked = field00.clone();
+    auto mask_of_field00 = field00_masked.clone();
+    mask_of_field00.deep_copy(sp(1.0));
+    mask_of_field00.sync_to_host();
+    auto mask = mask_of_field00.get_view<Real *, Host>();
+    mask(dim0 - 1) = sp(0.0);
+    mask_of_field00.sync_to_dev();
+    field00_masked.get_header().set_extra_data("mask_data", mask_of_field00);
+    field00_masked.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+    field00_masked.sync_to_dev();
+    auto result_mask = result.clone();
+    result.get_header().set_extra_data("mask_data", result_mask);
+    result.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+    horiz_contraction<Real>(result, field00_masked, field00);
+    result.sync_to_host();
+    v = result.get_view<Real, Host>();
+    Real wavg_sum1 = 0;
+    Real wavg_sum2 = 0;
+    auto wavg_v00 = field00.get_view<const Real *, Host>();
+    for(int i = 0; i < dim0; ++i) {
+      wavg_sum1 += mask(i) * wavg_v00(i) * wavg_v00(i);
+      wavg_sum2 += mask(i) * wavg_v00(i);
+    }
+    REQUIRE_THAT(v(), Catch::Matchers::WithinRel(wavg_sum1/wavg_sum2, tol));
+
+    // Repeat but with ALL masked values
+    result = fieldsc.clone();
+    // inject a mask as the last entry
+    field00_masked = field00.clone();
+    mask_of_field00 = field00_masked.clone();
+    mask_of_field00.deep_copy(sp(1.0));
+    mask_of_field00.sync_to_host();
+    mask = mask_of_field00.get_view<Real *, Host>();
+    for(int i = 0; i < dim0; ++i) {
+      mask(i) = sp(0.0);
+    }
+    mask_of_field00.sync_to_dev();
+    field00_masked.get_header().set_extra_data("mask_data", mask_of_field00);
+    Real mask_v = constants::fill_value<Real>;
+    field00_masked.get_header().set_extra_data("mask_value", mask_v);
+    field00_masked.sync_to_dev();
+    result_mask = result.clone();
+    result.get_header().set_extra_data("mask_data", result_mask);
+    result.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+    horiz_contraction<Real>(result, field00_masked, field00);
+    result.sync_to_host();
+    v = result.get_view<Real, Host>();
+    REQUIRE(v() == mask_v);
+
     // Test higher-order cases
     result = field_z.clone();
     horiz_contraction<Real>(result, field10, field00);
@@ -350,6 +401,58 @@ TEST_CASE("utils") {
       // integers squared (analytically known)
       Real havg = sp(sum_n_sq(dim2)) / sp(sum_n(dim2) * sum_n(dim2));
       REQUIRE_THAT(v(), Catch::Matchers::WithinRel(havg, tol));
+
+      // Repeat but with masked values
+      result = fieldsc.clone();
+      // inject a mask as the last entry
+      auto field00_masked = field00.clone();
+      auto mask_of_field00 = field00_masked.clone();
+      mask_of_field00.deep_copy(sp(1.0));
+      mask_of_field00.sync_to_host();
+      auto mask = mask_of_field00.get_view<Real *, Host>();
+      mask(dim0 - 1) = sp(0.0);
+      mask_of_field00.sync_to_dev();
+      field00_masked.get_header().set_extra_data("mask_data", mask_of_field00);
+      field00_masked.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+      field00_masked.sync_to_dev();
+      auto result_mask = result.clone();
+      result.get_header().set_extra_data("mask_data", result_mask);
+      result.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+      vert_contraction<Real,1>(result, field00_masked, field00);
+      result.sync_to_host();
+      v = result.get_view<Real, Host>();
+      Real wavg_sum1 = sp(0.0);
+      Real wavg_sum2 = sp(0.0);
+      auto wavg_v00 = field00.get_view<const Real *, Host>();
+      for(int i = 0; i < dim2; ++i) {
+        wavg_sum1 += mask(i) * wavg_v00(i) * wavg_v00(i);
+        wavg_sum2 += mask(i) * wavg_v00(i);
+      }
+      REQUIRE_THAT(v(), Catch::Matchers::WithinRel(wavg_sum1/wavg_sum2, tol));
+
+      // Repeat but with ALL masked values
+      result = fieldsc.clone();
+      // inject a mask as the last entry
+      field00_masked = field00.clone();
+      mask_of_field00 = field00_masked.clone();
+      mask_of_field00.deep_copy(sp(1.0));
+      mask_of_field00.sync_to_host();
+      mask = mask_of_field00.get_view<Real *, Host>();
+      for (int i=0; i < dim2; ++i) {
+        mask(i) = sp(0.0);
+      }
+      mask_of_field00.sync_to_dev();
+      field00_masked.get_header().set_extra_data("mask_data", mask_of_field00);
+      Real mask_v = constants::fill_value<Real>;
+      field00_masked.get_header().set_extra_data("mask_value", mask_v);
+      field00_masked.sync_to_dev();
+      result_mask = result.clone();
+      result.get_header().set_extra_data("mask_data", result_mask);
+      result.get_header().set_extra_data("mask_value", constants::fill_value<Real>);
+      vert_contraction<Real,1>(result, field00_masked, field00);
+      result.sync_to_host();
+      v = result.get_view<Real, Host>();
+      REQUIRE(v() == mask_v);
 
       // Test higher-order cases
       result = field_x.clone();
@@ -800,6 +903,130 @@ TEST_CASE ("compute_mask") {
     m.deep_copy(-1);
     compute_mask<Comparison::LE>(x,2,m);
     REQUIRE(views_are_equal(m,one));
+  }
+}
+
+TEST_CASE ("transpose") {
+  using namespace scream;
+
+  using namespace ShortFieldTagsNames;
+
+  // Setup random number generation
+  ekat::Comm comm(MPI_COMM_WORLD);
+
+  const int ncols = 3;
+  const int nlevs = 10;
+  const int ncmp1 = 2;
+  const int ncmp2 = 4;
+  const auto u1 = ekat::units::s;
+  const auto u2 = ekat::units::m;
+
+  std::vector<FieldTag> tags1d = {COL};
+  std::vector<FieldTag> tags2d = {COL, LEV};
+  std::vector<FieldTag> tags3d = {COL, CMP, LEV};
+  std::vector<FieldTag> tags4d = {COL, CMP, CMP, LEV};
+
+  std::vector<int>      dims1d = {ncols};
+  std::vector<int>      dims2d = {ncols,nlevs};
+  std::vector<int>      dims3d = {ncols,ncmp1,nlevs};
+  std::vector<int>      dims4d = {ncols,ncmp1,ncmp2,nlevs};
+
+  FieldIdentifier fid1d  ("foo", {tags1d,dims1d}, u1, "some_grid");
+  FieldIdentifier fid2d  ("foo", {tags2d,dims2d}, u1, "some_grid");
+  FieldIdentifier fid3d  ("foo", {tags3d,dims3d}, u1, "some_grid");
+  FieldIdentifier fid3di ("foo", {tags3d,dims3d}, u1, "some_grid", DataType::IntType);
+  FieldIdentifier fid4d  ("foo", {tags4d,dims4d}, u1, "some_grid");
+  FieldIdentifier fid2du2("foo", {tags4d,dims4d}, u2, "some_grid");
+
+  SECTION ("exceptions") {
+    Field f2d  (fid2d);
+    Field f2du2(fid2du2);
+    Field f3d  (fid3d);
+    Field f3di (fid3di);
+
+    REQUIRE_THROWS(transpose(f2d)); // not allocated
+
+    f2d.allocate_view();
+    f2du2.allocate_view();
+    f3d.allocate_view();
+    f3di.allocate_view();
+
+    REQUIRE_THROWS(transpose(f2d,f2du2));; // different units
+    REQUIRE_THROWS(transpose(f2d,f3d));;   // different layout
+    REQUIRE_THROWS(transpose(f3di,f3d));;  // different data type
+  }
+
+  using RPDF  = std::uniform_real_distribution<Real>;
+  auto engine = setup_random_test();
+  RPDF pdf(0, 1);
+
+  SECTION ("1d") {
+    Field f1d (fid1d);
+    f1d.allocate_view();
+    randomize(f1d, engine, pdf);
+
+    auto f1d_t = transpose(f1d);
+    REQUIRE(views_are_equal(f1d,f1d_t));
+  }
+
+  SECTION ("2d") {
+    Field f2d (fid2d);
+    f2d.allocate_view();
+    randomize(f2d, engine, pdf);
+    auto f2d_t = transpose(f2d);
+
+    f2d.sync_to_host();
+    f2d_t.sync_to_host();
+
+    auto f2d_h = f2d.get_view<const Real**,Host>();
+    auto f2d_t_h = f2d_t.get_view<const Real**,Host>();
+    for (int icol=0; icol<ncols; ++icol) {
+      for (int ilev=0; ilev<nlevs; ++ilev) {
+        REQUIRE (f2d_h(icol,ilev)==f2d_t_h(ilev,icol));
+      }
+    }
+  }
+
+  SECTION ("3d") {
+    Field f3d (fid3d);
+    f3d.allocate_view();
+    randomize(f3d, engine, pdf);
+    auto f3d_t = transpose(f3d);
+
+    f3d.sync_to_host();
+    f3d_t.sync_to_host();
+
+    auto f3d_h = f3d.get_view<const Real***,Host>();
+    auto f3d_t_h = f3d_t.get_view<const Real***,Host>();
+    for (int icol=0; icol<ncols; ++icol) {
+      for (int icmp=0; icmp<ncmp1; ++icmp) {
+        for (int ilev=0; ilev<nlevs; ++ilev) {
+          REQUIRE (f3d_h(icol,icmp,ilev)==f3d_t_h(ilev,icmp,icol));
+        }
+      }
+    }
+  }
+
+  SECTION ("4d") {
+    Field f4d (fid4d);
+    f4d.allocate_view();
+    randomize(f4d, engine, pdf);
+    auto f4d_t = transpose(f4d);
+
+    f4d.sync_to_host();
+    f4d_t.sync_to_host();
+
+    auto f4d_h = f4d.get_view<const Real****,Host>();
+    auto f4d_t_h = f4d_t.get_view<const Real****,Host>();
+    for (int icol=0; icol<ncols; ++icol) {
+      for (int icmp=0; icmp<ncmp1; ++icmp) {
+        for (int jcmp=0; jcmp<ncmp2; ++jcmp) {
+          for (int ilev=0; ilev<nlevs; ++ilev) {
+            REQUIRE (f4d_h(icol,icmp,jcmp,ilev)==f4d_t_h(ilev,jcmp,icmp,icol));
+          }
+        }
+      }
+    }
   }
 }
 

@@ -91,7 +91,7 @@ contains
          layerThickEdgeDrag,&!< [in] mean thickness at edge to use for drag
          layerThickEdgeMean  !< [in] mean thickness at edge
 
-      real (kind=RKIND), dimension(:), intent(in) :: &
+      real (kind=RKIND), dimension(:), intent(inout) :: &
          sfcFlxAttCoeff, &!< [in] attenuation coefficient for sfc fluxes
          surfaceStress    !< [in] surface stress at edges
 
@@ -132,9 +132,6 @@ contains
 
       call ocn_vel_forcing_topographic_wave_drag_tend(normalVelocity, &
                    tend, err1)
-      err = ior(err, err1)
-
-      call ocn_gofs_coupling_tend_drag(normalVelocity, tend, err1)
       err = ior(err, err1)
 
    !--------------------------------------------------------------------

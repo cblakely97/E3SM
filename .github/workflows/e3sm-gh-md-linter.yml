@@ -17,10 +17,10 @@ jobs:
     if: ${{ github.repository == 'E3SM-Project/E3SM' }}
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-    - uses: tj-actions/changed-files@v46
+    - uses: tj-actions/changed-files@v47
       id: changed-files
       with:
         files: '**/*.md'

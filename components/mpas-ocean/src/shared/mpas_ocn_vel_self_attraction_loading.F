@@ -34,6 +34,7 @@ module ocn_vel_self_attraction_loading
     use ocn_diagnostics_variables
     use ocn_config
     use ocn_mesh
+    use ocn_gofs_coupling, only: ocn_gofs_coupling_get_sal_fields
     use netcdf
     use mpas_global_sum_mod
 #ifdef _MPI
@@ -104,6 +105,7 @@ module ocn_vel_self_attraction_loading
     real(kind=RKIND), dimension(:),   allocatable :: Snm_local, SnmRe_local, SnmIm_local
     real(kind=RKIND), dimension(:,:), allocatable :: Snm_local_reproSum, SnmRe_local_reproSum, SnmIm_local_reproSum
     real(kind=RKIND), dimension(:),   allocatable :: btrPressure
+    real(kind=RKIND), dimension(:),   pointer :: sshInitSAL
     real(kind=RKIND), dimension(:), pointer :: coastalSmoothingFactor
     integer, dimension(:,:), allocatable :: blockIdxForward
     integer, dimension(:,:), allocatable :: blockIdxInverse
@@ -129,7 +131,7 @@ contains
 !-----------------------------------------------------------------------
 
     subroutine ocn_compute_self_attraction_loading(domain, forcingPool, &
-        dminfo, ssh, surfacePressure, err)!{{{
+        dminfo, ssh, atmosphericPressure, err)!{{{
 
         !-----------------------------------------------------------------
         !
@@ -138,7 +140,7 @@ contains
         !-----------------------------------------------------------------
         type (dm_info), intent(in) :: dminfo
         real (kind=RKIND), dimension(:), intent(in) :: ssh
-        real (kind=RKIND), dimension(:), intent(in) :: surfacePressure
+        real (kind=RKIND), dimension(:), intent(in) :: atmosphericPressure
 
         !-----------------------------------------------------------------
         !
@@ -163,8 +165,10 @@ contains
         !-----------------------------------------------------------------
 
         integer :: iCell
-        real (kind=RKIND) :: rho0gInv
-        
+        real (kind=RKIND) :: rho0gInv, gofsRamp, sd, bpAnom
+        logical :: gofsActive
+        real (kind=RKIND), dimension(:), pointer :: surfDensPtr, bpPtr, bpAvgPtr
+
         call mpas_timer_start('SAL Calculation')
 
         err = 0
@@ -175,11 +179,31 @@ contains
 
         rho0gInv = 1.0_RKIND / rho_sw / gravity
 
-        do iCell = 1,nCellsAll
-          ! compute SAL wrt. the full barotropic bottom pressure
-          btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
-              ssh(iCell) + rho0gInv * surfacePressure(iCell) )
-        enddo
+        call ocn_gofs_coupling_get_sal_fields(gofsActive, surfDensPtr, &
+                                              bpPtr, bpAvgPtr, gofsRamp)
+
+        if (gofsActive .and. associated(surfDensPtr) &
+                       .and. associated(bpPtr) &
+                       .and. gofsRamp > 0.0_RKIND) then
+          do iCell = 1,nCellsAll
+            sd = surfDensPtr(iCell)
+            if (sd /= sd) sd = rho_sw
+            bpAnom = bpPtr(iCell) - bpAvgPtr(iCell)
+            if (bpAnom /= bpAnom) bpAnom = 0.0_RKIND
+            btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
+                (ssh(iCell) - sshInitSAL(iCell)) + &
+                gofsRamp * (sd / rho_sw - 1.0_RKIND) * &
+                (ssh(iCell) - sshInitSAL(iCell)) + &
+                gofsRamp * rho0gInv * bpAnom + &
+                rho0gInv * atmosphericPressure(iCell) )
+          enddo
+        else
+          do iCell = 1,nCellsAll
+            btrPressure(iCell) = coastalSmoothingFactor(iCell) * ( &
+                (ssh(iCell) - sshInitSAL(iCell)) + &
+                rho0gInv * atmosphericPressure(iCell) )
+          enddo
+        endif
 
         if (.not. config_use_parallel_self_attraction_loading) then
 
@@ -681,6 +705,13 @@ contains
 
         ! Set up coastal smoothing
         allocate(btrPressure(nCellsAll))
+
+        call mpas_pool_get_array(forcingPool, 'sshInitSAL', sshInitSAL)
+        if (.not. config_do_restart) then
+           do iCell = 1,nCellsAll
+              sshInitSAL(iCell) = ssh(iCell)
+           enddo
+        endif
 
         ! Set-up smoothing mask for shallow regions where SAL should not
         ! be computed across e.g. wet-dry cells

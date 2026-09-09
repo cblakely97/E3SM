@@ -1,19 +1,20 @@
 #include <catch2/catch.hpp>
 #include <numeric>
 
-#include "ekat/kokkos/ekat_subview_utils.hpp"
 #include "share/field/field_identifier.hpp"
 #include "share/field/field_header.hpp"
 #include "share/field/field.hpp"
 #include "share/field/field_manager.hpp"
 #include "share/field/field_utils.hpp"
-#include "share/util/eamxx_setup_random_test.hpp"
+#include "share/field/field_impl.hpp"
+#include "eamxx_setup_random_test.hpp"
 
 #include "share/grid/point_grid.hpp"
 
-#include "ekat/ekat_pack.hpp"
-#include "ekat/ekat_pack_utils.hpp"
-#include "ekat/util/ekat_test_utils.hpp"
+#include <ekat_pack.hpp>
+#include <ekat_pack_utils.hpp>
+#include <ekat_test_utils.hpp>
+#include <ekat_subview_utils.hpp>
 
 namespace {
 
@@ -28,8 +29,9 @@ TEST_CASE("field_layout", "") {
   FieldLayout fl2 ({COL,CMP},{1,1});
   FieldLayout fl3 ({COL,CMP,CMP},{1,3,4});
   FieldLayout fl4 ({COL,LEV},{1,1});
-  FieldLayout fl5 ({COL,CMP,LEV},{1,1,1});
+  FieldLayout fl5 ({COL,CMP,LEV},{1,2,3});
   FieldLayout fl6 ({COL,CMP,CMP,ILEV},{1,5,6,1});
+  FieldLayout fl7 ({LEV,CMP,COL},{3,2,1});
 
   REQUIRE (fl1.type()==LayoutType::Scalar2D);
   REQUIRE (fl2.type()==LayoutType::Vector2D);
@@ -52,12 +54,15 @@ TEST_CASE("field_layout", "") {
   REQUIRE (not fl5.is_tensor_layout());
   REQUIRE (    fl6.is_tensor_layout());
 
+  REQUIRE (fl1.transpose()==fl1);
+  REQUIRE (fl5.transpose()==fl7);
+
   REQUIRE (fl2.get_vector_tag()==CMP);
   REQUIRE (fl5.get_vector_tag()==CMP);
   REQUIRE (fl2.get_vector_component_idx()==1);
   REQUIRE (fl5.get_vector_component_idx()==1);
   REQUIRE (fl2.get_vector_dim()==1);
-  REQUIRE (fl5.get_vector_dim()==1);
+  REQUIRE (fl5.get_vector_dim()==2);
 
   REQUIRE (fl3.get_tensor_tags()==TVec{CMP,CMP});
   REQUIRE (fl6.get_tensor_components_ids()==IVec{1,2});
@@ -512,18 +517,9 @@ TEST_CASE("field_mgr", "") {
   REQUIRE_THROWS(field_mgr.get_field("field1", "grid3")); // Wrong grid
 
   // Check that the groups names are in the header. While at it, make sure that case insensitive works fine.
-  auto has_group = [](const ekat::WeakPtrSet<const FieldGroupInfo>& groups,
-                      const std::string& name)->bool {
-    for (auto it : groups) {
-      if (it.lock()->m_group_name==name) {
-        return true;
-      }
-    }
-    return false;
-  };
-  REQUIRE (has_group(f2_1.get_header().get_tracking().get_groups_info(),"gRouP_1"));
-  REQUIRE (has_group(f1_2.get_header().get_tracking().get_groups_info(),"Group_2"));
-  REQUIRE (has_group(f1_2.get_header().get_tracking().get_groups_info(),"Group_1"));
+  REQUIRE (ekat::contains(f2_1.get_header().get_tracking().get_groups_names(),"gRouP_1"));
+  REQUIRE (ekat::contains(f1_2.get_header().get_tracking().get_groups_names(),"Group_2"));
+  REQUIRE (ekat::contains(f1_2.get_header().get_tracking().get_groups_names(),"Group_1"));
 
   // Check that correct grids requested groups
   REQUIRE (field_mgr.has_group("group_1", "grid1"));
@@ -880,6 +876,56 @@ TEST_CASE ("update") {
     }
   }
 
+  SECTION ("max-min") {
+    SECTION ("real") {
+      Field one = f_real.clone();
+      Field two = f_real.clone();
+      one.deep_copy(1.0);
+      two.deep_copy(2.0);
+
+      Field f1 = one.clone();
+      Field f2 = two.clone();
+      f1.max(f2);
+      REQUIRE (views_are_equal(f1, f2));
+
+      Field f3 = one.clone();
+      Field f4 = two.clone();
+      f4.min(f3);
+      REQUIRE (views_are_equal(f3, f4));
+
+      // Check that updating with rhs==fill_value ignores the rhs
+      f3.deep_copy(constants::fill_value<Real>);
+      f3.get_header().set_may_be_filled(true);
+      f2.deep_copy(1.0);
+      f2.max(f3);
+      REQUIRE (views_are_equal(f2,one));
+    }
+
+    SECTION ("int") {
+      Field one = f_int.clone();
+      Field two = f_int.clone();
+      one.deep_copy(1);
+      two.deep_copy(2);
+
+      Field f1 = one.clone();
+      Field f2 = two.clone();
+      f1.max(f2);
+      REQUIRE (views_are_equal(f1, f2));
+
+      Field f3 = one.clone();
+      Field f4 = two.clone();
+      f4.min(f3);
+      REQUIRE (views_are_equal(f3, f4));
+
+      // Check that updating with rhs==fill_value ignores the rhs
+      f3.deep_copy(constants::fill_value<int>);
+      f3.get_header().set_may_be_filled(true);
+      f2.deep_copy(1);
+      f2.max(f3);
+      REQUIRE (views_are_equal(f2,one));
+    }
+  }
+
   SECTION ("scale_inv") {
     SECTION ("real") {
       Field f1 = f_real.clone();
@@ -922,6 +968,19 @@ TEST_CASE ("update") {
       // Same, but we discard current content of f3
       f3.update(f_real,2,0);
       REQUIRE (views_are_equal(f3,f2));
+
+      // Check that updating with rhs==fill_value ignores the rhs
+      Field one = f_real.clone();
+      one.deep_copy(1.0);
+
+      f3.deep_copy(constants::fill_value<Real>);
+      f3.get_header().set_may_be_filled(true);
+      f2.deep_copy(1.0);
+      f2.update(f3,1,1);
+      if (not views_are_equal(f2,one)) {
+        print_field_hyperslab(f2);
+      }
+      REQUIRE (views_are_equal(f2,one));
     }
 
     SECTION ("int") {
@@ -941,6 +1000,16 @@ TEST_CASE ("update") {
       // Same, but we discard current content of f3
       f3.update(f_int,2,0);
       REQUIRE (views_are_equal(f3,f2));
+
+      // Check that updating with rhs==fill_value ignores the rhs
+      Field one = f_int.clone();
+      one.deep_copy(1);
+
+      f3.deep_copy(constants::fill_value<int>);
+      f3.get_header().set_may_be_filled(true);
+      f2.deep_copy(1);
+      f2.update(f3,1,1);
+      REQUIRE (views_are_equal(f2,one));
     }
   }
 }
