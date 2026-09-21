@@ -2245,7 +2245,7 @@ contains
     !-----------------------------------------------------------------
     ! Begin code
 
-    weights_filename_btr2bc='soma_weights_32km_to_16km.nc'
+    weights_filename_btr2bc='bc2btr_map.nc'
     call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
                                                          weights_filename_btr2bc,&
                                                          rowValues_bc2btr,&
@@ -2295,7 +2295,7 @@ contains
     !-----------------------------------------------------------------
     ! Begin code
 
-    weights_filename_btr2bc='soma_weights_16km_to_32km.nc'
+    weights_filename_btr2bc='btr2bc_map.nc'
     call ocn_spatial_mode_splitting_dmpar_remapping_init(domain,&
                                                          weights_filename_btr2bc,&
                                                          rowValues_btr2bc,&

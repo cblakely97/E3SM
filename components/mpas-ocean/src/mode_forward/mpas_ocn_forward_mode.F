@@ -306,6 +306,21 @@ module ocn_forward_mode
                                         'normalBarotropicVelocitySubcycle')
             call mpas_dmpar_exch_group_build_reusable_buffers(domain_ptr, &
                                                            'subcycleFields')
+
+            ! Set xtime and simulationStartTime in the btr domain's pool before
+            ! switching domain_ptr back to bc. Without this, ocn_diagnostics_init
+            ! binds the module-level xtime pointer to the bc pool, and the btr
+            ! domain's xtime field is never written (left as null bytes in restarts).
+            call mpas_pool_get_subpool(domain_ptr % blocklist % structs, &
+                                       'diagnostics', diagnosticsPool)
+            call mpas_pool_get_array(diagnosticsPool, 'xtime', xtime)
+            call mpas_pool_get_array(diagnosticsPool, 'simulationStartTime', &
+                                     simulationStartTime)
+            xtime = startTimeStamp
+            if (trim(simulationStartTime) == 'no_date_available') then
+               simulationStartTime = startTimeStamp
+            end if
+
             domain_ptr => domain % core % domainlist
             block => domain_ptr % blocklist
          end if
